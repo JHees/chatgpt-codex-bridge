@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.codex-chat-bridge",
+  "name": "Codex App Chat Bridge",
+  "version": "0.1.0",
+  "description": "Structured, single-session collaboration through Chat inside the Codex desktop app.",
+  "author": "ChatGPT Codex Bridge contributors",
+  "scope": "renderer",
+  "runAt": "document-end",
+  "entry": "index.js",
+  "documentation": "README.md",
+  "settings": { "mode": "none" },
+  "permissions": ["dom", "trusted-input"],
+  "hostCommands": { "operations": ["exchange", "finish"] }
+}

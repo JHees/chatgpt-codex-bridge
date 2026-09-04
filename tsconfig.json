@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["packages/**/*.ts", "tests/**/*.ts", "tools/**/*.ts", "vitest.config.ts"],
+  "exclude": [".conda", "node_modules", "dist", "packages/renderer-plugin/package"]
+}

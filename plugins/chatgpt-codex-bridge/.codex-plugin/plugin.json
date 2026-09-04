@@ -1,0 +1,16 @@
+{
+  "name": "chatgpt-codex-bridge",
+  "version": "0.1.0",
+  "description": "Structured collaboration with Chat inside the Codex desktop app through Script Loader.",
+  "author": { "name": "ChatGPT Codex Bridge maintainers" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex App Chat Bridge",
+    "shortDescription": "Consult App Chat through two Loader operations.",
+    "longDescription": "Keeps one structured collaboration session in the main Codex renderer; no MCP, daemon, web ChatGPT target, or project reader.",
+    "developerName": "ChatGPT Codex Bridge maintainers",
+    "category": "Productivity",
+    "capabilities": ["Structured App Chat exchange", "Correlated action-result loop"],
+    "defaultPrompt": ["Use bridge-chat to consult App Chat about this task."]
+  }
+}

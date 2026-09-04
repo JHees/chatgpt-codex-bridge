@@ -1,0 +1,19 @@
+.conda/
+node_modules/
+dist/
+coverage/
+*.log
+*.tmp
+*.bak
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+.DS_Store
+Thumbs.db
+
+# Runtime state belongs under %LOCALAPPDATA%, never in Git.
+.runtime/
+config/settings.json
+secrets/
