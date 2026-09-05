@@ -1,0 +1,82 @@
+name: Bridge CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  check:
+    name: Check and package (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: |
+          $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          [Console]::InputEncoding = [Text.UTF8Encoding]::new()
+          npm ci
+      - name: Typecheck, lint, test, build and verify release package
+        run: |
+          $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          [Console]::InputEncoding = [Text.UTF8Encoding]::new()
+          npm run check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bridge-package-${{ github.sha }}
+          path: |
+            dist/bridge-*.zip
+            dist/bridge-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish Loader update
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bridge-package-${{ github.sha }}
+          path: dist
+      - name: Publish the tested ZIP and checksum together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          [Console]::InputEncoding = [Text.UTF8Encoding]::new()
+          $version = $env:RELEASE_TAG.Substring(1)
+          $notes = 'Windows native Loader with schema-v2 bundled-skill and host-command support is required. Install the bridge ZIP once; it includes the bridge-chat skill. Chat currently uses the foreground App UI with Medium or High reasoning. Background sending, automatic Chat deletion and Bridge behavior settings are not included. See the repository usage guide for compatibility and update instructions.'
+          gh release create $env:RELEASE_TAG "dist/bridge-$version.zip" "dist/bridge-$version.zip.sha256" --verify-tag --draft --title "Bridge $version" --notes $notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --draft=false --latest

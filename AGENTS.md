@@ -1,6 +1,6 @@
 # Codex App Chat Bridge contributor contract
 
-This repository owns one Script Loader renderer plugin and one Codex skill. The only cross-repository dependency is the documented Loader `plugin invoke` command interface.
+This repository owns one Script Loader package containing a renderer plugin and a Codex skill. Cross-repository dependencies are the documented Loader package interface (including schema-v2 bundled skills) and the `plugin invoke` command interface.
 
 ## Boundaries
 

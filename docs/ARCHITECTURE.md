@@ -1,5 +1,11 @@
 # Bridge vNext architecture
 
+## Distribution
+
+One `bridge-0.1.0.zip` contains the renderer and `skills/bridge-chat`, including its protocol reference. The schema-v2 manifest declares `agentSkill: "bridge-chat"` and the `agent-skills` permission. A compatible native Windows Loader manages one discoverable skill entry pointing into this installed package, so enable, disable, update, rollback, quarantine, and restore apply to both components. There is no separately installed Codex plugin or copied skill version. This does not make the skill an independent service or give the renderer arbitrary filesystem access.
+
+## Runtime
+
 Bridge vNext has one request path and one return path:
 
 ```text

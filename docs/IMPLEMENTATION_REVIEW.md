@@ -1,5 +1,7 @@
 # Bridge 实现复查
 
+本文记录 `12a74ea` 的收发实现复查。后续已获授权的 Loader 修复和单包安装结果另见 [VALIDATION.md](VALIDATION.md)；本文中的“本轮”指该历史检查点。
+
 ## 结论
 
 “一个 renderer 插件 + 一个 skill + Loader 已有命令入口”的边界适合当前单任务协作需求。没有必要恢复 daemon、MCP、项目读取服务或引入 SQLite 收发。真正需要加强的是收发状态、消息边界和安装后可用性，而不是增加层次。

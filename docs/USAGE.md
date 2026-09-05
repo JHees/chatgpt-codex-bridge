@@ -20,14 +20,29 @@ Loader 始终持有随机 CDP 端口和 renderer target；命令调用方无法�
 
 ## 安装
 
-前置条件：Windows 版 Codex Script Loader `0.5.9` 或兼容版本已安装，Codex Desktop 由该 Loader 管理启动。
+前置条件：支持 **schemaVersion 2 随包 skill** 的 Windows 原生 Codex Script Loader 已安装，Codex Desktop 由该 Loader 管理启动。旧的 `0.5.9` 安装副本不一定具备此能力；本次没有修改版本号，因此不能仅凭版本号判断兼容性。
 
-1. 在 Bridge 仓库根目录执行 `npm run check`。
-2. 通过 Loader 的插件安装界面安装 `dist/loader-plugin`。
-3. 通过 Codex 插件管理安装 `dist/codex-plugin`，使 `bridge-chat` skill 可用。
-4. 使用 Loader 的 `--reload` 原位重载插件，无需刷新页面或重启 Codex。
+在 Loader 的插件安装界面选择 `bridge-0.1.0.zip`，确认“安装并启用”即可。预览会注明包含 `bridge-chat` skill；无需再到 Codex 插件管理安装第二个包，也无需手动复制 skill。开发者可先在仓库根目录运行 `npm run check`，生成 `dist/bridge-0.1.0.zip`；`dist/loader-plugin` 是同一包的文件夹形式。
+
+Loader 在当前用户的 `.agents/skills/bridge-chat` 建立指向已安装包内 skill 的受管目录入口，正文和 references 只有一份。插件禁用时移除入口，启用时恢复；更新和回滚直接使用同一包的内容。移除插件仍使用 Loader 可恢复的隔离流程，不删除你的普通会话或其他 skill。
+
+重复选择同 ID 的 ZIP 会进入替换预览，保留原有启用状态；替换会覆盖该插件的本地修改，需在同一次确认中明确同意。若 skill 入口已有手工安装内容，Loader 会报冲突并保留文件，不会自动覆盖。此前单独安装的 Codex skill 插件属于独立安装，需要一次性从其原管理入口移除，Loader 不擅自删除它。
+
+安装后在 Loader 列表核对“随包 skill · 已就绪”。Codex 的发现机制会检测 skill 变化；下一轮仍未出现时再检查或重启，不要重复安装。磁盘入口就绪不等于当前已开始的 Codex turn 已刷新技能列表。
 
 插件列表中应只出现一个 Bridge：`dev.codex-chat-bridge`。
+
+## 通过 Loader 自动更新
+
+发布地址为 [GitHub Releases](https://github.com/JHees/chatgpt-codex-bridge/releases)。每个正式版本提供 `bridge-版本号.zip` 和同名 `.sha256` 文件。不要把 GitHub 自动生成的 “Source code” ZIP 当成插件包；它没有已构建的 renderer。
+
+1. 首次安装一个包含更新声明的 Bridge ZIP。以前安装的包如果显示“未提供更新源”，需要手动选择新 ZIP 替换一次，之后才有更新入口。
+2. 在 Loader 的插件管理页，对 Bridge 启用“自动更新”；该选项默认关闭。也可先使用“检查更新”。
+3. Loader 检查此公开仓库的最新正式 Release，仅对更高版本执行更新，校验 ZIP 和 `.sha256` 后定向重载。skill 与插件共用一个包，随更新一起变化。
+
+插件有本地修改或新版本增加权限时，Loader 会要求确认。被禁用的插件不会自动启用；更新失败按 Loader 的事务流程回滚。该能力要求当前 Loader 自身支持 schema-v2 随包 skill，不会替代 Loader 原生程序升级。
+
+只推送源码或通过普通 CI 不会产生可检测的新版本；维护者还必须发布匹配 `vX.Y.Z` 标签的正式 Release。首个标签发布前，可从 Actions 下载测试包，但 Loader 没有 Release 可更新。发布步骤见 [RELEASING.md](RELEASING.md)。
 
 ## 日常使用
 
@@ -139,7 +154,7 @@ stdout 始终是版本化 JSON envelope：
 
 - `PROTOCOL_REPAIR_REQUIRED`：使用完全相同的 payload 重新调用一次 `exchange`，用于发送唯一一次协议修复请求。
 - `REPLY_TIMEOUT`：可使用相同 `sessionId` 和 `turnId` 继续读取，不得发送新消息。
-- `CALL_BUSY` / `TURN_PENDING` / `SESSION_BUSY`：已有调用、轮次或 session 未结束；不要并行发起第二条收发链路。
+- `COMMAND_BUSY` / `CALL_BUSY` / `TURN_PENDING` / `SESSION_BUSY`：已有调用、轮次或 session 未结束；不要并行发起第二条收发链路。
 - `TURN_CONFLICT`：同一轮次的 payload 被改变；保留原请求继续读取，不可用原 ID 换问题。
 - `COMPOSER_NOT_EMPTY` / `CHAT_BUSY` / `CHAT_CONFIGURATION_REQUIRED`：先处理草稿、生成状态或 Medium/High 配置；不要自动清空用户输入。
 - `SEND_UNCERTAIN`：立即停止，不得自动重发。

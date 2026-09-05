@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "dev.codex-chat-bridge",
   "name": "Codex App Chat Bridge",
   "version": "0.1.0",
@@ -10,6 +10,12 @@
   "entry": "index.js",
   "documentation": "README.md",
   "settings": { "mode": "none" },
-  "permissions": ["dom", "trusted-input"],
+  "permissions": ["dom", "trusted-input", "agent-skills"],
+  "agentSkill": "bridge-chat",
+  "update": {
+    "provider": "github-releases",
+    "repository": "JHees/chatgpt-codex-bridge",
+    "asset": "bridge-{version}.zip"
+  },
   "hostCommands": { "operations": ["exchange", "finish"] }
 }

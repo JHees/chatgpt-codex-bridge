@@ -1,12 +1,30 @@
 # Bridge 0.1.0 validation
 
-## Current working-tree review — 2026-09-05
+## GitHub distribution and CI — 2026-09-05
 
-`npm run check` passed typecheck, lint, all 49 tests, renderer build, and both package outputs. The packaged skill passed the skill validator and includes its protocol reference. Regression tests were first observed failing against the previous implementation. A combined test uses the actual controller and DOM adapter through repair, result reporting, duplicate reads, and finish.
+The public update source is `JHees/chatgpt-codex-bridge`. Local `npm run check` passed **50 tests**, typecheck, lint, build, ZIP creation and release-package verification after adding the manifest update contract. The CI workflow YAML was parsed locally; live workflow status is available under [GitHub Actions](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml).
 
-These current working-tree changes have **not** been installed, hot-reloaded, or accepted against a live Chat. No Loader source, version field, Git history, tag, or remote was changed in this review. Live acceptance of the modified send checks and DOM extraction remains necessary before release.
+Normal CI publishes test artifacts only. A stable version tag must match every package version and the declared repository before its ZIP and checksum can be published as a Loader update. Initial source publication keeps version **0.1.0** and does not itself create a version tag or Release. No current Loader/plugin installation is changed by this work.
 
-The subsequently requested background transport, automatic conversation deletion, settings page, and in-page skill installation are a new scope, not functionality proven by these 49 tests. See [NEXT_FEATURES.md](NEXT_FEATURES.md).
+## Single-package installation — 2026-09-05
+
+The current Bridge source builds one `bridge-0.1.0.zip` and its SHA-256 file, plus the unpacked form of the same package. `npm run check` passed typecheck, lint, all **49 tests**, renderer build, and packaging. The relocated `skills/bridge-chat` passed the skill validator. The ZIP contains 7 entries, including its manifest, renderer, skill, and protocol reference; it has no second `.codex-plugin` package. Its generated checksum was verified independently.
+
+An isolated compatibility check passed the **actual ZIP** through the native Loader's public package interface using fresh temporary Loader and user-skill directories. It verified install, disable, enable, same-ID replacement with enable-state preservation, quarantine, and restore. The test removed only its temporary files and link. It did not inject the renderer or exercise Chat.
+
+Loader changes were authorized separately and preserve its pre-existing worktree changes. Native Release solution build passed with **0 warnings / 0 errors**; `CodexScriptLoader.Tests` passed **227 assertions**. Node `npm run check` and all **100 tests** passed independently. New native regressions cover malformed pipe input, bounded response errors, legacy commands during a pending invocation, a full reload against simulated CDP while a plugin Promise remains pending, configuration preservation, per-plugin manifest failures, update/removal serialization, and bundled-skill lifecycle/rollback/conflicts/recovery. A deterministic regression also verifies that status and injection-plan reads cannot overwrite a pending enable change.
+
+Bridge remains **0.1.0** and Loader remains **0.5.9**. No release version, tag, remote, or current installation was changed. Loader installer packaging/signature checks, installation through the live settings UI, skill discovery inside Codex, and live Chat acceptance have **not** been performed for this working tree. This source capability requires a rebuilt native Loader; plugin hot reload cannot update the native binary.
+
+Background transport, automatic Chat deletion, and a Bridge-specific behavior settings page remain unimplemented. The skill is now installed with Bridge from Loader's management page; there is no separate in-page skill installer to complete. See [NEXT_FEATURES.md](NEXT_FEATURES.md).
+
+## Previous implementation review (`12a74ea`) — 2026-09-05
+
+At that checkpoint, `npm run check` passed typecheck, lint, all 49 tests, renderer build, and the then-separate package outputs. The packaged skill passed the skill validator and includes its protocol reference. Regression tests were first observed failing against the previous implementation. A combined test uses the actual controller and DOM adapter through repair, result reporting, duplicate reads, and finish.
+
+Those controller/DOM changes have **not** been installed, hot-reloaded, or accepted against a live Chat. That earlier review did not modify Loader source, version fields, tags, or remotes. Live acceptance of the modified send checks and DOM extraction remains necessary before release.
+
+The subsequently requested transport and distribution work is separate from that checkpoint, as described above.
 
 ## Historical installed-runtime acceptance
 

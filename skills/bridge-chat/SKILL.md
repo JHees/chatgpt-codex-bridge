@@ -9,7 +9,7 @@ Use this skill only when the user asks to consult or collaborate with Chat insid
 
 ## Preconditions
 
-The Windows Codex Script Loader and the `dev.codex-chat-bridge` renderer plugin must already be installed and running. Do not start a daemon, MCP server, browser page, worker, Tunnel, or second Codex instance.
+The Windows Codex Script Loader and the `dev.codex-chat-bridge` renderer plugin must already be installed and running. This skill is bundled with that plugin and is managed by the same installation; do not install a second Codex plugin. Do not start a daemon, MCP server, browser page, worker, Tunnel, or second Codex instance.
 
 Resolve the command client from `%LOCALAPPDATA%\Programs\CodexScriptLoader\active.json`: read `version` and `rid`, then use `versions\<version>\<rid>\CodexScriptLoader.Command.exe`. Fail if the pointer or executable is missing; do not search arbitrary directories.
 
@@ -34,7 +34,7 @@ Allow only one invocation at a time. The plugin checks Medium or High before eac
 
 - `PROTOCOL_REPAIR_REQUIRED`: invoke `exchange` once with the identical saved payload. This dispatches the only repair message. Do not create another repair layer.
 - `REPLY_TIMEOUT`: the send was confirmed. If still within the consultation's time budget, invoke with the identical saved payload to continue reading, including when a repair is pending. Do not change IDs to resend. If no time budget was agreed, allow one extra read, then finish and report the timeout.
-- `CALL_BUSY`, `TURN_PENDING`, `SESSION_BUSY`: do not launch overlapping work. Let the existing call/session finish. Resume only the known pending payload; do not finish someone else's session.
+- `COMMAND_BUSY`, `CALL_BUSY`, `TURN_PENDING`, `SESSION_BUSY`: do not launch overlapping work. Let the existing call/session finish. Resume only the known pending payload; do not finish someone else's session.
 - `COMPOSER_NOT_EMPTY`, `CHAT_BUSY`, `CHAT_CONFIGURATION_REQUIRED`: require the draft, generation, or configuration to be resolved before another send. Do not clear a user's draft. Finish or ask for user intervention as appropriate.
 - `TURN_CONFLICT`, `INVALID_REQUEST`: correct the caller, not the Chat. Never mutate a previously submitted payload under the same turn ID.
 - `SEND_UNCERTAIN`, `PROTOCOL_INVALID`, `DOM_AMBIGUOUS`, `BRIDGE_FAILED`: stop sending and finish if identity remains valid. These failures remain terminal for that session.
