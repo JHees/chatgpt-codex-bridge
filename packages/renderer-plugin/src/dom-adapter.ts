@@ -59,9 +59,10 @@ export class AppChatDomAdapter implements ChatDomPort {
   private conversationKey: string | undefined;
   private conversationKeysBeforeSession = new Set<string>();
   private pendingSendMarker: string | undefined;
-  private readonly replyBaselines = new Map<string, number>();
   private sessionId: string | undefined;
   private sessionAnchorMarker: string | undefined;
+  private initialComposer: HTMLElement | undefined;
+  private generation = 0;
 
   constructor(private readonly document: Document, options: AdapterOptions = {}) {
     this.pollMs = options.pollMs ?? 100;
@@ -70,26 +71,38 @@ export class AppChatDomAdapter implements ChatDomPort {
   }
 
   async beginSession(sessionId: string): Promise<void> {
+    const generation = this.generation;
     if (this.sessionId !== undefined) throw new BridgeError("SESSION_BUSY", "A DOM session is already active.");
     if (this.document.location.href !== "app://-/index.html") throw new BridgeError("SESSION_LOST", "Bridge is not running in the Codex main renderer.");
-    if (this.userEntries("codex-bridge:").length > 0) {
+    if (this.messageEntries().some(({ text }) => text.trimStart().startsWith("codex-bridge:"))) {
       throw new BridgeError("SESSION_LOST", "A prior Bridge conversation is visible but its in-memory session was lost.");
     }
     this.conversationKeysBeforeSession = new Set(this.conversationRows().map(({ key }) => key));
+    this.assertEmptyComposer();
     const newChat = this.uniqueAction(labels.newChat, "new Chat");
+    this.sessionId = sessionId;
     newChat.click();
     await this.waitFor(() => {
+      if (this.composers().length === 0) return false;
       this.uniqueComposer();
       this.uniqueAction(labels.back, "back");
       return true;
     }, "SESSION_LOST", "App Chat controls did not appear.", Math.min(this.timeoutMs, 10_000));
+    this.assertGeneration(generation);
+    this.initialComposer = this.uniqueComposer();
     await this.ensureChatConfiguration();
-    this.sessionId = sessionId;
+    this.assertGeneration(generation);
     this.sessionAnchorMarker = undefined;
   }
 
+  async checkSession(): Promise<void> {
+    await this.ensureSessionVisible();
+  }
+
   async exchange(message: string, marker: string, correlation: ReplyCorrelation): Promise<string | LoaderHostAction> {
+    const generation = this.generation;
     await this.ensureSessionVisible(marker);
+    this.assertGeneration(generation);
     const existing = this.userEntries(marker);
     if (existing.length > 1) throw new BridgeError("DOM_AMBIGUOUS", "Multiple user messages match the Bridge turn.");
     if (existing.length === 0) {
@@ -114,8 +127,11 @@ export class AppChatDomAdapter implements ChatDomPort {
         }
       } else {
         if (this.pendingSendMarker !== undefined) throw new BridgeError("SEND_UNCERTAIN", "Another Bridge message has an unresolved send state.");
-        this.uniqueComposer();
-        this.replyBaselines.set(marker, this.protocolReplySources(correlation).length);
+        if (this.actions(labels.generating).length > 0) throw new BridgeError("CHAT_BUSY", "Wait for the current generation to end before sending.");
+        this.assertEmptyComposer();
+        await this.ensureChatConfiguration();
+        this.assertGeneration(generation);
+        this.requireSession();
         this.enterComposer(message);
         this.pendingSendMarker = marker;
         return trustedEnterAction;
@@ -132,7 +148,7 @@ export class AppChatDomAdapter implements ChatDomPort {
     const marker = this.sessionAnchorMarker;
     this.activate(this.uniqueAction(labels.back, "back"));
     await this.waitFor(
-      () => marker !== undefined ? this.userEntries(marker).length === 0 : this.actions(labels.back).length === 0,
+      () => this.actions(labels.back).length === 0 && (marker === undefined || this.userEntries(marker).length === 0),
       "RESTORE_REQUIRED",
       "Codex task restoration could not be verified.",
       Math.min(this.timeoutMs, 10_000),
@@ -141,16 +157,27 @@ export class AppChatDomAdapter implements ChatDomPort {
   }
 
   resetSession(): void {
+    this.generation += 1;
     this.conversationKey = undefined;
     this.conversationKeysBeforeSession.clear();
     this.pendingSendMarker = undefined;
-    this.replyBaselines.clear();
     this.sessionId = undefined;
     this.sessionAnchorMarker = undefined;
+    this.initialComposer = undefined;
   }
 
   private requireSession(): void {
-    if (this.sessionId === undefined) throw new BridgeError("SESSION_LOST", "No App Chat session is active.");
+    if (this.sessionId === undefined || this.document.location.href !== "app://-/index.html") throw new BridgeError("SESSION_LOST", "No App Chat session is active in the main renderer.");
+  }
+
+  private assertGeneration(generation: number): void {
+    if (generation !== this.generation || this.document.location.href !== "app://-/index.html") throw new BridgeError("SESSION_LOST", "The renderer session changed while waiting.");
+  }
+
+  private assertEmptyComposer(): void {
+    if (this.composers().some((composer) => (composer.textContent ?? "").trim().length > 0)) {
+      throw new BridgeError("COMPOSER_NOT_EMPTY", "An unsent draft is present. Bridge will not replace it.");
+    }
   }
 
   private enterComposer(message: string): void {
@@ -172,6 +199,10 @@ export class AppChatDomAdapter implements ChatDomPort {
     } else {
       composer.dispatchEvent(new Event("input", { bubbles: true }));
     }
+    const exactText = [composer.innerText, composer.textContent].some((text) => text?.replace(/\r\n/g, "\n") === message);
+    if (this.document.activeElement !== composer || !exactText) {
+      throw new BridgeError("SEND_UNCERTAIN", "The prepared composer text or focus could not be verified. Enter was not requested.");
+    }
   }
 
   private async waitForStableReply(marker: string, correlation: ReplyCorrelation): Promise<string> {
@@ -179,16 +210,22 @@ export class AppChatDomAdapter implements ChatDomPort {
     let stableSince = 0;
     try {
       return await this.waitFor(() => {
+        this.requireSession();
+        if (this.userEntries(marker).length === 0) throw new BridgeError("SESSION_LOST", "The pending user turn is no longer visible.");
         this.captureConversationKey();
         if (this.actions(labels.generating).length > 0) {
           last = "";
           stableSince = 0;
           return undefined;
         }
-        const replies = this.protocolReplySources(correlation).slice(this.replyBaselines.get(marker) ?? 0);
+        const replies = this.protocolReplySources(marker, correlation);
         if (replies.length > 1) throw new BridgeError("DOM_AMBIGUOUS", "Multiple assistant replies match the Bridge turn.");
         const current = replies[0]?.trim() ?? "";
-        if (current.length === 0) return undefined;
+        if (current.length === 0) {
+          last = "";
+          stableSince = 0;
+          return undefined;
+        }
         if (current !== last) {
           last = current;
           stableSince = Date.now();
@@ -199,11 +236,9 @@ export class AppChatDomAdapter implements ChatDomPort {
     } catch (error) {
       if (error instanceof BridgeError && error.code === "REPLY_TIMEOUT") {
         const users = this.userEntries(marker).length;
-        const assistants = Math.max(0, this.protocolReplySources(correlation).length - (this.replyBaselines.get(marker) ?? 0));
+        const assistants = this.protocolReplySources(marker, correlation).length;
         const generating = this.actions(labels.generating).length;
         const composers = this.composers().length;
-        const controls = this.conversationControlLabels(marker);
-        const semanticActions = this.semanticActionSignatures();
         const edit = this.actions(labels.edit).length;
         const back = this.actions(labels.back).length;
         const newChat = this.actions(labels.newChat).length;
@@ -212,34 +247,50 @@ export class AppChatDomAdapter implements ChatDomPort {
         const conversationRows = this.conversationRows().length;
         const conversationKey = this.conversationKey === undefined ? 0 : 1;
         const pending = [...this.document.querySelectorAll<HTMLElement>('[aria-busy="true"],[role="progressbar"]')].filter((element) => this.isUsable(element)).length;
-        const alerts = [...this.document.querySelectorAll<HTMLElement>('[role="alert"],[role="status"]')]
-          .filter((element) => this.isUsable(element))
-          .map((element) => (element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 64))
-          .filter(Boolean)
-          .slice(0, 3);
         const online = this.document.defaultView?.navigator.onLine ?? true;
-        throw new BridgeError("REPLY_TIMEOUT", `Timed out waiting for the correlated App Chat reply. State: u=${users}, a=${assistants}, edit=${edit}, gen=${generating}, composer=${composers}, pending=${pending}, back=${back}, new=${newChat}, mode=${chatMode}, model=${modelSelector}, rows=${conversationRows}, key=${conversationKey}, online=${Number(online)}, visibility=${this.document.visibilityState}, controls=${JSON.stringify(controls)}, actions=${JSON.stringify(semanticActions)}, alerts=${JSON.stringify(alerts)}.`);
+        throw new BridgeError("REPLY_TIMEOUT", `Timed out waiting for the App Chat reply. State: u=${users}, a=${assistants}, edit=${edit}, gen=${generating}, composer=${composers}, pending=${pending}, back=${back}, new=${newChat}, mode=${chatMode}, model=${modelSelector}, rows=${conversationRows}, key=${conversationKey}, online=${Number(online)}, visibility=${this.document.visibilityState}.`);
       }
       throw error;
     }
   }
 
-  private protocolReplySources(correlation: ReplyCorrelation): string[] {
+  private protocolReplySources(marker: string, correlation: ReplyCorrelation): string[] {
     const body = this.document.body;
     if (body === null) return [];
+    const users = this.messageEntries();
+    const anchor = users.find(({ text }) => this.hasMarker(text, marker))?.container;
+    if (anchor === undefined) return [];
+    const nextUser = users.find(({ container }) => Boolean(anchor.compareDocumentPosition(container) & 4))?.container;
+    const inReply = (element: HTMLElement): boolean => this.isUsable(element)
+      && element.closest('[contenteditable],button,[role="button"],nav,aside') === null
+      && !users.some(({ container }) => container.contains(element) || element.contains(container))
+      && Boolean(anchor.compareDocumentPosition(element) & 4)
+      && (nextUser === undefined || Boolean(element.compareDocumentPosition(nextUser) & 4));
     const NodeFilterConstructor = this.document.defaultView?.NodeFilter;
     if (NodeFilterConstructor === undefined) return [];
     const walker = this.document.createTreeWalker(body, NodeFilterConstructor.SHOW_TEXT);
-    const results = new Set<string>();
+    const results = new Map<HTMLElement, string>();
     let node = walker.nextNode();
     while (node !== null) {
       const text = node.textContent ?? "";
-      if (text.includes(PROTOCOL) || text.includes(correlation.sessionId)) {
-        let current = node.parentElement;
+      const pre = node.parentElement?.closest("pre");
+      if (pre != null || text.includes(PROTOCOL) || text.includes(correlation.sessionId) || text.includes("codex-bridge-response-v1")) {
+        let current: HTMLElement | null = pre ?? node.parentElement;
         for (let depth = 0; depth < 12 && current !== null && current !== body; depth += 1) {
-          const parsed = this.correlatedProtocolJson(current.textContent ?? "", correlation);
-          if (parsed !== undefined) {
-            results.add(parsed);
+          if (!inReply(current)) break;
+          const source = (current.textContent ?? "").trim();
+          const start = source.indexOf("{");
+          const end = source.lastIndexOf("}");
+          // Preserve malformed blocks for the protocol validator/one-repair policy.
+          // IDs are checked there, not used here to silently discard a bad answer.
+          const codeBlock = current.matches("pre,code");
+          if ((codeBlock && source.length > 0) || (start >= 0 && end > start)) {
+            let candidate = source.includes("```") ? source : `\`\`\`codex-bridge-response-v1\n${source.slice(start, end > start ? end + 1 : undefined)}\n\`\`\``;
+            if (codeBlock && !source.includes("```")) candidate = `\`\`\`codex-bridge-response-v1\n${source}\n\`\`\``;
+            if (![...results.keys()].some((element) => current!.contains(element) && element !== current)) {
+              for (const element of results.keys()) if (element.contains(current)) results.delete(element);
+              results.set(current, candidate);
+            }
             break;
           }
           current = current.parentElement;
@@ -247,68 +298,40 @@ export class AppChatDomAdapter implements ChatDomPort {
       }
       node = walker.nextNode();
     }
-    return [...results].map((source) => `\`\`\`codex-bridge-response-v1\n${source}\n\`\`\``);
-  }
-
-  private correlatedProtocolJson(source: string, correlation: ReplyCorrelation): string | undefined {
-    const start = source.indexOf("{");
-    const end = source.lastIndexOf("}");
-    if (start < 0 || end <= start) return undefined;
-    try {
-      const value = JSON.parse(source.slice(start, end + 1)) as Record<string, unknown>;
-      if (value.protocol !== PROTOCOL
-        || value.sessionId !== correlation.sessionId
-        || value.turnId !== correlation.turnId
-        || typeof value.status !== "string"
-        || !Array.isArray(value.actions)) return undefined;
-      return JSON.stringify(value);
-    } catch {
-      return undefined;
-    }
+    return [...results.values()];
   }
 
   private userEntries(marker: string): MessageEntry[] {
-    return this.messageEntries().filter((entry) => entry.text.includes(marker));
+    return this.messageEntries().filter((entry) => this.hasMarker(entry.text, marker));
   }
 
-  private conversationControlLabels(marker: string): string[] {
-    const user = this.userEntries(marker)[0];
-    const root = user?.container.parentElement ?? user?.container;
-    if (root === undefined) return [];
-    const values = [...root.querySelectorAll<HTMLElement>("button,[role=button],[role=status],[role=progressbar]")]
-      .filter((element) => this.isUsable(element))
-      .map((element) => element.getAttribute("aria-label") ?? element.getAttribute("title"))
-      .filter((value): value is string => value !== null && value.length > 0 && value.length <= 48);
-    return [...new Set(values)].slice(-10);
-  }
-
-  private semanticActionSignatures(): string[] {
-    const values = [...this.document.querySelectorAll<HTMLElement>("button,[role=button]")]
-      .filter((element) => this.isUsable(element))
-      .map((element) => [
-        element.getAttribute("aria-label"),
-        element.getAttribute("title"),
-        element.getAttribute("data-testid"),
-        (element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 24),
-      ].filter((value): value is string => value !== null && value.length > 0).join("|"))
-      .filter((value) => /复制|编辑|重新生成|copy|edit|regenerate/i.test(value))
-      .map((value) => value.slice(0, 72));
-    return [...new Set(values)].slice(-6);
+  private hasMarker(text: string, marker: string): boolean {
+    const content = text.trimStart();
+    return content === marker || (content.startsWith(marker) && /^\s/.test(content.slice(marker.length)));
   }
 
   private messageEntries(): MessageEntry[] {
     const containers = [...this.document.querySelectorAll<HTMLElement>("button,[role=button]")]
       .filter((element) => this.isUsable(element) && this.matches(element, labels.edit))
       .map((element) => element.closest("[data-message-id],article,[role=listitem]") ?? this.messageAncestor(element));
-    return [...new Set(containers)].map((container) => ({ container, text: container.textContent ?? "" }));
+    return [...new Set(containers)].map((container) => {
+      const content = container.cloneNode(true) as HTMLElement;
+      content.querySelectorAll('button,[role="button"]').forEach((element) => element.remove());
+      return { container, text: content.textContent ?? "" };
+    });
   }
 
   private async ensureSessionVisible(turnMarker?: string): Promise<void> {
     this.requireSession();
     const anchor = this.sessionAnchorMarker;
-    if (anchor === undefined) return;
+    if (anchor === undefined) {
+      const posted = this.pendingSendMarker !== undefined && this.userEntries(this.pendingSendMarker).length === 1;
+      if (!posted && this.initialComposer !== undefined && this.composers()[0] !== this.initialComposer) throw new BridgeError("SESSION_LOST", "The initial Chat composer was replaced before the first turn was confirmed.");
+      return;
+    }
     const visible = this.userEntries(anchor).length;
     if (visible > 1) throw new BridgeError("DOM_AMBIGUOUS", "Multiple user messages match the Bridge session anchor.");
+    if (visible === 0) throw new BridgeError("SESSION_LOST", "The dedicated Chat anchor is no longer visible. Bridge will not navigate to a guessed conversation.");
     const currentTurnIsPosted = turnMarker !== undefined && this.userEntries(turnMarker).length === 1;
     if (visible === 1 && (turnMarker === undefined || currentTurnIsPosted || this.composers().length === 1)) return;
 
@@ -316,22 +339,12 @@ export class AppChatDomAdapter implements ChatDomPort {
     if (this.conversationKey === undefined) {
       throw new BridgeError("SESSION_LOST", "The dedicated App Chat identity could not be recovered.");
     }
-    let rows = this.conversationRows().filter(({ key }) => key === this.conversationKey);
-    if (rows.length === 0) {
-      const replacements = this.conversationRows().filter(({ key }) => !this.conversationKeysBeforeSession.has(key));
-      if (replacements.length === 1) {
-        this.conversationKey = replacements[0]!.key;
-        rows = replacements;
-      } else if (replacements.length > 1) {
-        throw new BridgeError("DOM_AMBIGUOUS", "Multiple replacement App Chat sidebar identities appeared during the Bridge session.");
-      }
-    }
+    const rows = this.conversationRows().filter(({ key }) => key === this.conversationKey);
     if (rows.length !== 1) {
       throw new BridgeError(rows.length === 0 ? "SESSION_LOST" : "DOM_AMBIGUOUS", "The dedicated App Chat sidebar identity is unavailable or ambiguous.");
     }
-    const open = this.uniqueConversationOpenAction(rows[0]!.element);
-    this.activate(open);
-    if (this.composers().length === 0) this.activate(rows[0]!.element);
+    this.uniqueConversationOpenAction(rows[0]!.element);
+    this.activate(rows[0]!.element);
     await this.waitFor(() => {
       const matches = this.userEntries(anchor).length;
       if (matches > 1) throw new BridgeError("DOM_AMBIGUOUS", "Multiple user messages match the Bridge session anchor.");
@@ -427,14 +440,14 @@ export class AppChatDomAdapter implements ChatDomPort {
     try {
       this.uniqueAction(labels.chatGptMode, "ChatGPT mode");
     } catch (error) {
-      if (error instanceof BridgeError && error.code === "DOM_AMBIGUOUS") throw error;
+      if (error instanceof BridgeError && ["DOM_AMBIGUOUS", "SESSION_LOST"].includes(error.code)) throw error;
       throw new BridgeError("CHAT_CONFIGURATION_REQUIRED", "App Chat must use ChatGPT mode; Pro is not allowed.");
     }
     let selector: HTMLElement;
     try {
       selector = this.uniqueAction(labels.modelSelector, "ChatGPT model selector");
     } catch (error) {
-      if (error instanceof BridgeError && error.code === "DOM_AMBIGUOUS") throw error;
+      if (error instanceof BridgeError && ["DOM_AMBIGUOUS", "SESSION_LOST"].includes(error.code)) throw error;
       throw new BridgeError("CHAT_CONFIGURATION_REQUIRED", "App Chat reasoning level could not be verified.");
     }
     const current = (selector.textContent ?? "").trim().replace(/\s+/g, " ");
@@ -458,7 +471,7 @@ export class AppChatDomAdapter implements ChatDomPort {
         Math.min(this.timeoutMs, 3_000),
       );
     } catch (error) {
-      if (error instanceof BridgeError && error.code === "DOM_AMBIGUOUS") throw error;
+      if (error instanceof BridgeError && ["DOM_AMBIGUOUS", "SESSION_LOST"].includes(error.code)) throw error;
       throw new BridgeError("CHAT_CONFIGURATION_REQUIRED", "App Chat reasoning level must be Medium or High.");
     }
     high.click();
@@ -489,26 +502,27 @@ export class AppChatDomAdapter implements ChatDomPort {
       || element.closest('[hidden],[aria-hidden="true"]') !== null || element.hasAttribute("disabled")) return false;
     const view = this.document.defaultView;
     if (view !== null) {
-      const style = view.getComputedStyle(element);
-      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+      for (let current: HTMLElement | null = element; current !== null; current = current.parentElement) {
+        const style = view.getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+      }
     }
     return true;
   }
 
   private async waitFor<T>(probe: () => T | undefined | false, code: string, message: string, timeoutMs = this.timeoutMs): Promise<T> {
     const deadline = Date.now() + timeoutMs;
-    let lastError: unknown;
+    const generation = this.generation;
     while (Date.now() <= deadline) {
+      this.assertGeneration(generation);
       try {
         const value = probe();
         if (value !== undefined && value !== false) return value;
       } catch (error) {
-        if (error instanceof BridgeError && error.code === "DOM_AMBIGUOUS") throw error;
-        lastError = error;
+        if (!(error instanceof BridgeError) || error.code !== "DOM_NOT_FOUND") throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, this.pollMs));
     }
-    if (lastError instanceof BridgeError && lastError.code === "DOM_AMBIGUOUS") throw lastError;
     throw new BridgeError(code, message);
   }
 }

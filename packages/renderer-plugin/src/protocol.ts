@@ -79,8 +79,8 @@ export function parseBridgeRequest(input: unknown): BridgeRequest {
 }
 
 export function parseBridgeResponse(source: string, sessionId: string, turnId: string): BridgeResponse {
-  const blocks = [...source.matchAll(/```codex-bridge-response-v1[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
-  if (blocks.length !== 1) throw new ProtocolError("Chat must return exactly one codex-bridge-response-v1 block.");
+  const blocks = [...source.matchAll(/^```codex-bridge-response-v1[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm)];
+  if (blocks.length !== 1 || [...source.matchAll(/^```/gm)].length !== 2) throw new ProtocolError("Chat must return exactly one codex-bridge-response-v1 block and no other fenced block.");
   let parsed: unknown;
   try {
     parsed = JSON.parse(blocks[0]?.[1] ?? "");

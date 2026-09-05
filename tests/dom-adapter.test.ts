@@ -2,6 +2,7 @@ import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 
 import { AppChatDomAdapter } from "../packages/renderer-plugin/src/dom-adapter.js";
+import { BridgeController } from "../packages/renderer-plugin/src/controller.js";
 
 const correlation = (sessionId = "session-1", turnId = "turn-1") => ({ sessionId, turnId });
 
@@ -29,7 +30,11 @@ function chatDocument() {
 
 function onTrustedEnter(document: Document, handler: () => void) {
   document.querySelector('[role="textbox"]')?.addEventListener("keydown", (event) => {
-    if ((event as KeyboardEvent).key === "Enter") handler();
+    if ((event as KeyboardEvent).key === "Enter") {
+      handler();
+      const composer = document.querySelector('[role="textbox"]');
+      if (composer !== null) composer.textContent = "";
+    }
   });
 }
 
@@ -54,12 +59,168 @@ async function exchangeWithTrustedEnter(
 }
 
 describe("AppChatDomAdapter", () => {
+  it("runs the real controller through repair, action result, duplicate read, and finish", async () => {
+    const { document } = chatDocument();
+    const controller = new BridgeController(new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 30 }));
+    const request = {
+      protocol: "codex-chat-bridge/v1", sessionId: "session-1", turnId: "turn-1", kind: "request",
+      objective: "Verify integration", state: { phase: "verify", summary: "Ready", completed: [], blockers: [] },
+      message: "What next?", actionResults: [],
+    };
+    let sends = 0;
+    onTrustedEnter(document, () => {
+      sends += 1;
+      const user = document.createElement("article");
+      const content = document.createElement("p");
+      content.textContent = document.querySelector('[role="textbox"]')!.textContent;
+      const edit = document.createElement("button");
+      edit.setAttribute("aria-label", "编辑消息");
+      user.append(content, edit);
+      const answer = document.createElement("pre");
+      const value = JSON.parse(protocolJson("session-1", sends === 3 ? "turn-2" : "turn-1"));
+      if (sends === 1) value.kind = "response";
+      if (sends === 2) {
+        value.status = "continue";
+        value.actions = [{ id: "a1", type: "verify", instruction: "Check a fixture", expectedResult: "Pass" }];
+      }
+      answer.textContent = JSON.stringify(value);
+      document.body.append(user, answer);
+    });
+    const invoke = async (payload: unknown) => {
+      const initial = await controller.exchange(payload);
+      if (!("$loaderHostAction" in initial)) return initial;
+      const KeyboardEventConstructor = document.defaultView!.KeyboardEvent;
+      document.activeElement!.dispatchEvent(new KeyboardEventConstructor("keydown", { key: "Enter", bubbles: true }));
+      return await controller.exchange(payload);
+    };
+    await expect(invoke(request)).rejects.toMatchObject({ code: "PROTOCOL_REPAIR_REQUIRED" });
+    await expect(invoke(request)).resolves.toMatchObject({ status: "continue" });
+    await expect(invoke(request)).resolves.toMatchObject({ status: "continue" });
+    await expect(invoke({ ...request, turnId: "turn-2", kind: "result", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Pass", evidence: ["fixture"] }] })).resolves.toMatchObject({ status: "complete" });
+    expect(sends).toBe(3);
+    document.querySelector('[aria-label="返回"]')!.addEventListener("pointerdown", () => {
+      document.querySelectorAll('article,pre,[aria-label="返回"]').forEach((element) => element.remove());
+    });
+    await expect(controller.finish({ sessionId: "session-1" })).resolves.toEqual({ finished: true });
+  });
+
+  it("does not use a replacement composer before the first send", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.querySelector('[role="textbox"]')!.remove();
+    document.body.insertAdjacentHTML("beforeend", '<div role="textbox" contenteditable="true"></div>');
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).rejects.toMatchObject({ code: "SESSION_LOST" });
+  });
+
+  it("reads a repair only after its exact user anchor, not the original response", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", `<article><p>marker-1</p><button aria-label="编辑消息"></button></article><section>${protocolJson("session-1", "turn-1", "old")}</section><article><p>marker-1:repair</p><button aria-label="编辑消息"></button></article><section>${protocolJson("session-1", "turn-1", "repaired")}</section>`);
+    await expect(adapter.exchange("unused", "marker-1", correlation())).resolves.toContain('"old"');
+    await expect(adapter.exchange("unused", "marker-1:repair", correlation())).resolves.toContain('"repaired"');
+  });
+
+  it("does not navigate back into a Chat after the user leaves it", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", `<article><p>marker-1</p><button aria-label="编辑消息"></button></article><section>${protocolJson()}</section>`);
+    await adapter.exchange("unused", "marker-1", correlation());
+    document.querySelector("article")!.remove();
+    await expect(adapter.checkSession()).rejects.toMatchObject({ code: "SESSION_LOST" });
+  });
+
+  it("rejects an extra rendered code block and validates wrong IDs instead of ignoring them", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", `<article><p>marker-1</p><button aria-label="编辑消息"></button></article><pre>${protocolJson("wrong-session")}</pre>`);
+    await expect(adapter.exchange("unused", "marker-1", correlation())).resolves.toContain("wrong-session");
+    document.body.insertAdjacentHTML("beforeend", '<pre>an additional code block</pre>');
+    await expect(adapter.exchange("unused", "marker-1", correlation())).rejects.toMatchObject({ code: "DOM_AMBIGUOUS" });
+  });
+
+  it("requires Back to leave Chat, not merely hide the old message", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 5 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", `<article><p>marker-1</p><button aria-label="编辑消息"></button></article><section>${protocolJson()}</section>`);
+    await adapter.exchange("unused", "marker-1", correlation());
+    document.querySelector('[aria-label="返回"]')!.addEventListener("pointerdown", () => document.querySelector("article")!.remove());
+    await expect(adapter.finishSession("session-1")).rejects.toMatchObject({ code: "RESTORE_REQUIRED" });
+  });
+
+  it("does not replace a user's unsent draft", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    const composer = document.querySelector('[role="textbox"]')!;
+    composer.textContent = "My draft";
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).rejects.toMatchObject({ code: "COMPOSER_NOT_EMPTY" });
+    expect(composer.textContent).toBe("My draft");
+  });
+
+  it("does not send while another answer is generating", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", '<button aria-label="停止生成"></button>');
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).rejects.toMatchObject({ code: "CHAT_BUSY" });
+    expect(document.querySelector('[role="textbox"]')?.textContent).toBe("");
+  });
+
+  it("distinguishes a turn from longer IDs and its repair marker", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", '<article><p>marker-10</p><button aria-label="编辑消息"></button></article>');
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).resolves.toHaveProperty("$loaderHostAction");
+  });
+
+  it("rejects two identical replies instead of merging them", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", `<article><p>marker-1</p><button aria-label="编辑消息"></button></article><section>${protocolJson()}</section><section>${protocolJson()}</section>`);
+    await expect(adapter.exchange("request", "marker-1", correlation())).rejects.toMatchObject({ code: "DOM_AMBIGUOUS" });
+  });
+
+  it("ignores hidden, earlier, composer, and user-quoted protocol objects", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 5 });
+    await adapter.beginSession("session-1");
+    document.querySelector('[role="textbox"]')!.textContent = protocolJson();
+    document.body.insertAdjacentHTML("beforeend", `<section>${protocolJson()}</section><article><p>marker-1\n${protocolJson()}</p><button aria-label="编辑消息"></button></article><div style="display:none"><section>${protocolJson()}</section></div>`);
+    await expect(adapter.exchange("request", "marker-1", correlation())).rejects.toMatchObject({ code: "REPLY_TIMEOUT" });
+  });
+
+  it("passes malformed protocol blocks to validation rather than timing out", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", '<article><p>marker-1</p><button aria-label="编辑消息"></button></article><section>codex-bridge-response-v1<pre>{"protocol":"codex-chat-bridge/v1", broken JSON}</pre></section>');
+    await expect(adapter.exchange("request", "marker-1", correlation())).resolves.toContain("broken JSON");
+  });
+
+  it("cancels a reply wait immediately on reset", async () => {
+    const { document } = chatDocument();
+    const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 100 });
+    await adapter.beginSession("session-1");
+    document.body.insertAdjacentHTML("beforeend", '<article><p>marker-1</p><button aria-label="编辑消息"></button></article>');
+    const pending = adapter.exchange("request", "marker-1", correlation());
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    adapter.resetSession();
+    await expect(pending).rejects.toMatchObject({ code: "SESSION_LOST" });
+  });
+
   it("uses the unique composer and trusted Enter without a Send button or composer label", async () => {
     const { document } = chatDocument();
     const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 20 });
     await adapter.beginSession("session-1");
 
-    await expect(adapter.exchange("message marker-1", "marker-1", correlation())).resolves.toEqual({
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).resolves.toEqual({
       $loaderHostAction: { version: 1, type: "press-enter" },
     });
     expect(document.querySelector('[role="textbox"]')?.textContent).toContain("marker-1");
@@ -70,9 +231,9 @@ describe("AppChatDomAdapter", () => {
     const { document } = chatDocument();
     const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 5 });
     await adapter.beginSession("session-1");
-    await adapter.exchange("message marker-1", "marker-1", correlation());
+    await adapter.exchange("marker-1\nrequest", "marker-1", correlation());
 
-    await expect(adapter.exchange("message marker-1", "marker-1", correlation())).rejects.toMatchObject({
+    await expect(adapter.exchange("marker-1\nrequest", "marker-1", correlation())).rejects.toMatchObject({
       code: "SEND_UNCERTAIN",
       message: expect.stringContaining("activeComposer=true"),
     });
@@ -88,7 +249,7 @@ describe("AppChatDomAdapter", () => {
     const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 5 });
     await adapter.beginSession("session-1");
 
-    await expect(exchangeWithTrustedEnter(adapter, document, "message marker-1", "marker-1")).rejects.toMatchObject({
+    await expect(exchangeWithTrustedEnter(adapter, document, "marker-1\nrequest", "marker-1")).rejects.toMatchObject({
       code: "REPLY_TIMEOUT",
       message: expect.stringContaining("back=1, new=1, mode=1, model=1"),
     });
@@ -105,7 +266,7 @@ describe("AppChatDomAdapter", () => {
     const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 50 });
     await adapter.beginSession("session-1");
 
-    await expect(exchangeWithTrustedEnter(adapter, document, "message marker-1", "marker-1")).resolves.toContain("split");
+    await expect(exchangeWithTrustedEnter(adapter, document, "marker-1\nrequest", "marker-1")).resolves.toContain("split");
   });
 
   it("fails closed when two different replies match one turn", async () => {
@@ -141,7 +302,7 @@ describe("AppChatDomAdapter", () => {
     await expect(exchangeWithTrustedEnter(
       adapter,
       document,
-      "message marker-en",
+      "marker-en\nrequest",
       "marker-en",
       correlation("session-en", "turn-en"),
     )).resolves.toContain("English");
@@ -204,7 +365,7 @@ describe("AppChatDomAdapter", () => {
     });
     const adapter = new AppChatDomAdapter(document, { pollMs: 1, stableMs: 0, timeoutMs: 50 });
     await adapter.beginSession("session-1");
-    await exchangeWithTrustedEnter(adapter, document, "message marker-1", "marker-1");
+    await exchangeWithTrustedEnter(adapter, document, "marker-1\nrequest", "marker-1");
     document.querySelector('[role="textbox"]')?.remove();
 
     const row = document.querySelector<HTMLElement>('[data-sidebar-chatgpt-conversation-key]')!;
@@ -212,7 +373,7 @@ describe("AppChatDomAdapter", () => {
       if (event.target === row) document.body.insertAdjacentHTML("beforeend", '<div role="textbox" contenteditable="true"></div>');
     });
 
-    await expect(adapter.exchange("message marker-2", "marker-2", correlation("session-1", "turn-2"))).resolves.toEqual({
+    await expect(adapter.exchange("marker-2\nrequest", "marker-2", correlation("session-1", "turn-2"))).resolves.toEqual({
       $loaderHostAction: { version: 1, type: "press-enter" },
     });
   });
@@ -227,6 +388,7 @@ describe("AppChatDomAdapter", () => {
     await adapter.exchange("must not send", "marker-1", correlation());
     document.querySelector('[aria-label="返回"]')?.addEventListener("pointerdown", () => {
       document.querySelector("#anchor")?.remove();
+      document.querySelector('[aria-label="返回"]')?.remove();
     });
 
     await expect(adapter.finishSession("session-1")).resolves.toBeUndefined();

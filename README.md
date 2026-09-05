@@ -14,13 +14,17 @@ Codex task → bridge-chat skill → CodexScriptLoader.Command.exe
 The renderer package exposes exactly two operations:
 
 - `exchange`: open or continue one dedicated App Chat, send a correlated structured turn, and return its validated response.
-- `finish`: verify the session, use the exact Back action, and restore the original Codex task.
+- `finish`: verify the session and use the exact Back action to leave Chat. Returning to the originating task relies on the App's Back navigation.
 
 See [docs/USAGE.md](docs/USAGE.md) for installation, normal use, manual invocation, protocol examples, and failure recovery. The completed acceptance boundary is recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
 
 The renderer fills and focuses the unique editable Chat composer, then requests one fixed trusted Enter from Loader. It does not locate or click a Send button. Loader accepts that continuation only because the package declares `trusted-input`; callers cannot choose a key, coordinate, selector, CDP method, or JavaScript source. The same `exchange` payload is resumed after Enter so the message is never automatically resent.
 
-Reply identity does not depend on the assistant's Copy button, localized button text, or a particular `pre > code` element shape. The renderer searches visible message text for a strict protocol object and accepts it only when `protocol`, `sessionId`, and `turnId` match the pending request. Local Codex SQLite files are not used: they contain Codex task/history records, not the authoritative App Chat conversation stream.
+Reply identity does not depend on the assistant's Copy button, localized button text, or a particular `pre > code` element shape. Reading is bounded to the visible region after the exact sent user marker and before the next user message. Hidden content, composers, and user quotations are excluded; identical duplicate blocks remain ambiguous. Protocol validation checks `protocol`, `sessionId`, and `turnId` after extraction so malformed blocks can trigger the one-repair policy. Local Codex SQLite files are not used as an App Chat transport.
+
+Calls are mutually exclusive. A pending turn cannot be overtaken, a turn ID cannot be reused with changed content, and uncertain sends or failed repairs stop the session until finish. The plugin protects unsent drafts and checks Medium/High reasoning before every send. The installed skill includes its own protocol reference.
+
+This is a narrow adapter over internal App UI, not a stable public Chat API. Navigation/model labels and user-message Edit controls still require Chinese or English support. Generation completion uses visible controls plus stable text; arbitrary prose without a recognizable block may time out. Page identity changes fail closed instead of guessing. See [the implementation review](docs/IMPLEMENTATION_REVIEW.md) for fixes and remaining limits.
 
 ## Build and test
 

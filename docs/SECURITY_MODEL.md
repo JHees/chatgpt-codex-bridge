@@ -13,11 +13,12 @@ Bridge vNext is trusted local renderer code with deliberately small authority. I
 
 ## Session and DOM rules
 
-- Only one in-memory Bridge session may be active.
+- Only one in-memory Bridge session and one invocation may be active. A new turn cannot overtake an unresolved one. The same turn ID cannot change payload. Reset invalidates in-flight work; cached replies require a live session check.
 - The plugin uses exact Chinese or English labels only for navigation and Chat configuration. The composer is the unique editable textbox, independent of its localized label, and no Send button is located or clicked.
-- User turns are confirmed by their Edit action and unique marker. Replies are parsed directly from visible protocol JSON and must match the pending protocol, session, and turn IDs; assistant action labels are irrelevant.
+- User turns are confirmed by their Edit action and exact leading marker. Reply candidates are bounded by the sent user message and the next user message; user quotations, composers, and hidden regions are excluded. Identical duplicate blocks are not merged. The parser, not the candidate scan, rejects malformed JSON and mismatched IDs; assistant action labels are irrelevant.
 - Navigation, renderer replacement, plugin reload, Codex restart, or loss of the dedicated Chat identity produces `SESSION_LOST`. Bridge does not guess, reopen an unrelated conversation, or resend automatically.
-- `finish` uses the exact Back action. If restoration cannot be verified it returns `RESTORE_REQUIRED` and does not click a guessed sidebar item.
+- `finish` uses the exact Back action and confirms leaving Chat. It cannot independently verify the original task ID. If leaving Chat cannot be verified it returns `RESTORE_REQUIRED` and does not click a guessed sidebar item.
+- Drafts are preserved, Medium/High reasoning is checked before every new send, and errors contain structural counters rather than copied UI content. Unexpected failures, uncertain sends, and failed protocol repair stop further sending until finish.
 
 ## Structured-response trust
 

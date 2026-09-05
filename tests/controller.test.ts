@@ -32,6 +32,7 @@ class FakeDom implements ChatDomPort {
   resets = 0;
 
   async beginSession(): Promise<void> { this.began += 1; }
+  async checkSession(): Promise<void> {}
   async exchange(message: string, marker: string): Promise<string> {
     this.calls.push({ message, marker });
     const next = this.replies.shift();
@@ -43,6 +44,78 @@ class FakeDom implements ChatDomPort {
 }
 
 describe("BridgeController", () => {
+  it("rejects concurrent calls before either can create or mutate a session", async () => {
+    const dom = new FakeDom();
+    let release!: () => void;
+    dom.beginSession = () => new Promise<void>((resolve) => { release = resolve; });
+    const controller = new BridgeController(dom);
+    const pending = controller.exchange(request);
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "CALL_BUSY" });
+    await expect(controller.finish({ sessionId: request.sessionId })).rejects.toMatchObject({ code: "CALL_BUSY" });
+    release();
+    await pending;
+  });
+
+  it("rejects changed payloads under the same turn ID", async () => {
+    const dom = new FakeDom();
+    const controller = new BridgeController(dom);
+    await controller.exchange(request);
+    await expect(controller.exchange({ ...request, message: "A different request" })).rejects.toMatchObject({ code: "TURN_CONFLICT" });
+    expect(dom.calls).toHaveLength(1);
+  });
+
+  it("checks live identity before returning a cached response", async () => {
+    const dom = new FakeDom();
+    const controller = new BridgeController(dom);
+    await controller.exchange(request);
+    dom.checkSession = async () => { throw new BridgeError("SESSION_LOST", "Navigation"); };
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "SESSION_LOST" });
+    expect(dom.calls).toHaveLength(1);
+  });
+
+  it("does not allow a new turn to overtake a pending reply", async () => {
+    const dom = new FakeDom();
+    dom.replies = [];
+    const controller = new BridgeController(dom);
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "REPLY_TIMEOUT" });
+    await expect(controller.exchange({ ...request, turnId: "turn-2" })).rejects.toMatchObject({ code: "TURN_PENDING" });
+    expect(dom.calls).toHaveLength(1);
+  });
+
+  it("latches terminal send failures until finish instead of trying another turn", async () => {
+    const dom = new FakeDom();
+    dom.exchange = async () => { dom.began += 1; throw new BridgeError("SEND_UNCERTAIN", "Unknown send state"); };
+    const controller = new BridgeController(dom);
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "SEND_UNCERTAIN" });
+    const count = dom.began;
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "SEND_UNCERTAIN" });
+    await expect(controller.exchange({ ...request, turnId: "turn-2" })).rejects.toMatchObject({ code: "SEND_UNCERTAIN" });
+    expect(dom.began).toBe(count);
+    await expect(controller.finish({ sessionId: request.sessionId })).resolves.toEqual({ finished: true });
+  });
+
+  it("invalidates in-flight work when the plugin is reset", async () => {
+    const dom = new FakeDom();
+    let release!: () => void;
+    dom.beginSession = () => new Promise<void>((resolve) => { release = resolve; });
+    const controller = new BridgeController(dom);
+    const pending = controller.exchange(request);
+    controller.reset();
+    release();
+    await expect(pending).rejects.toMatchObject({ code: "SESSION_LOST" });
+    expect(dom.calls).toHaveLength(0);
+  });
+
+  it("does not keep polling a second malformed repair", async () => {
+    const dom = new FakeDom();
+    dom.replies = ["invalid", "invalid", reply()];
+    const controller = new BridgeController(dom);
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "PROTOCOL_REPAIR_REQUIRED" });
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "PROTOCOL_INVALID" });
+    await expect(controller.exchange(request)).rejects.toMatchObject({ code: "PROTOCOL_INVALID" });
+    expect(dom.calls).toHaveLength(2);
+  });
+
   it("creates one session and caches a completed turn without resending", async () => {
     const dom = new FakeDom();
     const controller = new BridgeController(dom);

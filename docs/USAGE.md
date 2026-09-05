@@ -16,7 +16,7 @@ Codex 任务
   → 结构化结果沿原路径返回 Codex
 ```
 
-Loader 始终持有随机 CDP 端口和 renderer target；Bridge 无法指定 CDP method、JavaScript、selector、按键或坐标。插件对外只允许 `exchange` 和 `finish` 两个操作。
+Loader 始终持有随机 CDP 端口和 renderer target；命令调用方无法通过 payload 指定 CDP method、JavaScript、selector、按键或坐标。Bridge 本身是受信任的本地 DOM 插件，对外只允许 `exchange` 和 `finish` 两个操作。
 
 ## 安装
 
@@ -42,6 +42,8 @@ skill 会自动：
 3. 发送当前目标、状态、问题和上一轮执行结果。
 4. 把 Chat 返回的 actions 视为不可信意图，按 Codex 现有权限和安全规则决定是否执行。
 5. 在任务完成、需要用户输入或出现终止错误时调用 `finish`，恢复原 Codex 任务。
+
+每次调用都应等待上一调用结束。超时继续读取时，保留原始完整 payload，不仅是原 ID；同一 ID 改写问题会被拒绝。不要在专用 Chat 中插入无关手动消息或切换页面。插件不会清空你的草稿，每次发送前都会重新核对 Medium/High。
 
 ## 请求协议
 
@@ -92,14 +94,18 @@ Chat 必须返回唯一的 `codex-bridge-response-v1` fenced JSON block：
 通常应使用 `bridge-chat` skill。需要排查时，可以手动调用 Loader 客户端：
 
 ```powershell
+$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+[Console]::InputEncoding = [Text.UTF8Encoding]::new()
 $pointerPath = Join-Path $env:LOCALAPPDATA 'Programs\CodexScriptLoader\active.json'
 $pointer = Get-Content -Raw -LiteralPath $pointerPath | ConvertFrom-Json
 $command = Join-Path (Split-Path $pointerPath) "versions\$($pointer.version)\$($pointer.rid)\CodexScriptLoader.Command.exe"
+if (-not (Test-Path -LiteralPath $command -PathType Leaf)) { throw 'Loader command client is missing' }
+$bridgeSessionId = [guid]::NewGuid().ToString('N')
 
 $request = @{
   protocol = 'codex-chat-bridge/v1'
-  sessionId = 'manual-session-1'
-  turnId = 'turn-1'
+  sessionId = $bridgeSessionId
+  turnId = [guid]::NewGuid().ToString('N')
   kind = 'request'
   objective = '验证 Bridge'
   state = @{ phase = 'verify'; summary = '手动验证'; completed = @(); blockers = @() }
@@ -113,7 +119,7 @@ $request | & $command plugin invoke --id dev.codex-chat-bridge --operation excha
 完成后恢复原 Codex 任务：
 
 ```powershell
-'{"sessionId":"manual-session-1"}' |
+(@{ sessionId = $bridgeSessionId } | ConvertTo-Json -Compress) |
   & $command plugin invoke --id dev.codex-chat-bridge --operation finish
 ```
 
@@ -133,8 +139,12 @@ stdout 始终是版本化 JSON envelope：
 
 - `PROTOCOL_REPAIR_REQUIRED`：使用完全相同的 payload 重新调用一次 `exchange`，用于发送唯一一次协议修复请求。
 - `REPLY_TIMEOUT`：可使用相同 `sessionId` 和 `turnId` 继续读取，不得发送新消息。
+- `CALL_BUSY` / `TURN_PENDING` / `SESSION_BUSY`：已有调用、轮次或 session 未结束；不要并行发起第二条收发链路。
+- `TURN_CONFLICT`：同一轮次的 payload 被改变；保留原请求继续读取，不可用原 ID 换问题。
+- `COMPOSER_NOT_EMPTY` / `CHAT_BUSY` / `CHAT_CONFIGURATION_REQUIRED`：先处理草稿、生成状态或 Medium/High 配置；不要自动清空用户输入。
 - `SEND_UNCERTAIN`：立即停止，不得自动重发。
-- `SESSION_LOST` 或 `DOM_AMBIGUOUS`：不猜测会话，结束当前流程后重建新 session。
+- `PROTOCOL_INVALID` / `DOM_AMBIGUOUS` / `BRIDGE_FAILED`：本 session 停止发送；身份仍可确认时可调用 `finish`。
+- `SESSION_LOST` 或命令客户端/管道本身超时：停止并报告，不假定消息未发送，也不自动新建 session 重发。
 - `RESTORE_REQUIRED`：手动返回原 Codex 任务，不点击不确定的侧边栏项。
 
 ## 已知边界
@@ -144,3 +154,7 @@ stdout 始终是版本化 JSON envelope：
 - 只支持中文和英文的 App Chat 导航与模型配置标签。
 - 插件重载、Codex 重启或用户导航可能使内存 session 丢失。
 - 本地 Codex SQLite 不是 App Chat 消息源，Bridge 不读写这些数据库。
+- 页面仍是 Codex 的内部实现，导航、编辑消息动作或布局变化可能需要适配；它不是官方稳定的 Chat API。
+- 生成结束依赖“停止生成控件消失 + 内容稳定”，不是服务端完成事件。完全无结构的普通回复可能超时，不能保证所有格式错误都能触发自动修复。
+- `finish` 核对的是 Back 控件和 Bridge 消息离开当前页面；原任务的返回目的地由 App 自己管理，并没有独立校验原任务 ID。
+- 本次源码检查和历史实机验收的区别见 [VALIDATION.md](VALIDATION.md)。构建不等于已热更新运行副本。

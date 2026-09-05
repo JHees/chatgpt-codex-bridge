@@ -72,4 +72,9 @@ describe("codex-chat-bridge/v1 protocol", () => {
     expect(() => parseBridgeResponse(block({ ...base, status: "continue", actions: [] }), "session-1", "turn-1")).toThrowError("continue");
     expect(() => parseBridgeResponse(block({ ...base, status: "needs_user", actions: [{ id: "a1", type: "inspect", instruction: "Inspect", expectedResult: "Done" }] }), "session-1", "turn-1")).toThrowError("ask_user");
   });
+
+  it("rejects an additional non-protocol fence", () => {
+    const response = { protocol: "codex-chat-bridge/v1", sessionId: "session-1", turnId: "turn-1", status: "complete", summary: "Done", actions: [] };
+    expect(() => parseBridgeResponse(`${block(response)}\n\`\`\`text\nextra\n\`\`\``, "session-1", "turn-1")).toThrowError("exactly one");
+  });
 });
