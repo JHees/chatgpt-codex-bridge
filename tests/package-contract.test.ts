@@ -32,15 +32,15 @@ describe("vNext package boundary", () => {
     });
   });
 
-  it("declares one bundled skill and only exchange and finish runtime operations", async () => {
+  it("declares one bundled skill, task settings and three background runtime operations", async () => {
     const manifest = JSON.parse(await readFile(join(root, "packages", "renderer-plugin", "package", "manifest.json"), "utf8")) as Record<string, unknown>;
-    expect(manifest.permissions).toEqual(["dom", "trusted-input", "agent-skills"]);
+    expect(manifest.permissions).toEqual(["dom", "local-storage", "settings", "composer", "agent-skills"]);
     expect(manifest.schemaVersion).toBe(2);
     expect(manifest.agentSkill).toBe("bridge-chat");
     expect(manifest.runAt).toBe("document-end");
     expect(manifest.documentation).toBe("README.md");
-    expect(manifest.settings).toEqual({ mode: "none" });
-    expect(manifest.hostCommands).toEqual({ operations: ["exchange", "finish"] });
+    expect(manifest.settings).toEqual({ mode: "page", pageId: "main", title: "Bridge" });
+    expect(manifest.hostCommands).toEqual({ operations: ["status", "exchange", "finish"] });
     expect(manifest).not.toHaveProperty("pageCompanion");
   });
 

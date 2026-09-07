@@ -17,6 +17,7 @@ await mkdir(dist, { recursive: true });
 await cp(join(renderer, "package"), join(dist, "loader-plugin"), { recursive: true });
 await cp(join(root, "skills"), join(dist, "loader-plugin", "skills"), { recursive: true });
 await cp(join(renderer, "dist", "index.cjs"), join(dist, "loader-plugin", "index.js"));
+await cp(join(root, "node_modules", "lucide", "LICENSE"), join(dist, "loader-plugin", "lucide-LICENSE.txt"));
 const archive = join(dist, `bridge-${metadata.version}.zip`);
 const pwsh = join(process.env.ProgramFiles ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe");
 const result = spawnSync(pwsh, ["-NoProfile", "-File", join(root, "tools", "package-zip.ps1"), "-Source", join(dist, "loader-plugin"), "-Destination", archive], { stdio: "inherit" });

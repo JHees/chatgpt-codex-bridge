@@ -73,6 +73,26 @@ describe("codex-chat-bridge/v1 protocol", () => {
     expect(() => parseBridgeResponse(block({ ...base, status: "needs_user", actions: [{ id: "a1", type: "inspect", instruction: "Inspect", expectedResult: "Done" }] }), "session-1", "turn-1")).toThrowError("ask_user");
   });
 
+  it("normalizes known research action synonyms without guessing IDs, permissions or unknown operations", () => {
+    const base={protocol:"codex-chat-bridge/v1",sessionId:"session-1",turnId:"turn-1",status:"continue",summary:"Research",actions:[]};
+    for(const type of ["investigate","research","analyze","analyse","synthesize","summarize"]){
+      const action={id:"a1",type,instruction:"Compare the cited evidence",expectedResult:"Verified findings"};
+      expect(parseBridgeResponse(block({...base,actions:[action]}),"session-1","turn-1").actions).toEqual([{...action,type:"inspect"}]);
+    }
+    expect(()=>parseBridgeResponse(block({...base,actions:[{id:"a1",type:"execute_arbitrary",instruction:"Text",expectedResult:"Text"}]}),"session-1","turn-1")).toThrow();
+  });
+
+  it("accepts unambiguous JSON presentation and a redundant response discriminator only", () => {
+    const value={protocol:"codex-chat-bridge/v1",sessionId:"session-1",turnId:"turn-1",kind:"response",status:"complete",summary:"Plan result only",actions:[]};
+    for(const text of [JSON.stringify(value), '```json\n'+JSON.stringify(value)+'\n```',block(value)]){
+      expect(parseBridgeResponse(text,"session-1","turn-1")).not.toHaveProperty("kind");
+    }
+    expect(()=>parseBridgeResponse(JSON.stringify({...value,kind:"request"}),"session-1","turn-1")).toThrow();
+    expect(()=>parseBridgeResponse(JSON.stringify({...value,extra:"untrusted-private-key"}),"session-1","turn-1")).toThrowError(/unknown field/);
+    expect(()=>parseBridgeResponse(JSON.stringify(value)+JSON.stringify(value),"session-1","turn-1")).toThrow();
+    expect(()=>parseBridgeResponse('```json\n'+JSON.stringify(value)+'\n```\n'+block(value),"session-1","turn-1")).toThrow();
+  });
+
   it("rejects an additional non-protocol fence", () => {
     const response = { protocol: "codex-chat-bridge/v1", sessionId: "session-1", turnId: "turn-1", status: "complete", summary: "Done", actions: [] };
     expect(() => parseBridgeResponse(`${block(response)}\n\`\`\`text\nextra\n\`\`\``, "session-1", "turn-1")).toThrowError("exactly one");

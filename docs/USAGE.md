@@ -1,175 +1,98 @@
-# Bridge 0.1.0 运行与使用说明
+# Bridge 后台协作使用说明
 
-Bridge 让一个 Codex 任务通过 Codex Desktop 内置 Chat 进行结构化协作。它只包含一个 Loader renderer 插件和一个 `bridge-chat` skill，不启动 daemon、MCP、Tunnel、网页 ChatGPT 或监听端口。
+本文描述 Bridge 0.1.1。已通过用户候选验收及 Sol「中」→ Luna 三轮后台调研闭环；发布范围见 [版本说明](RELEASE-0.1.1.md)，实测证据见 [验收记录](VALIDATION.md)。未验收的模型搭配与任务类型不视为全面支持。
 
-## 运行原理
+## 运行方式
 
-```text
-Codex 任务
-  → bridge-chat skill 生成 codex-chat-bridge/v1 请求
-  → CodexScriptLoader.Command.exe plugin invoke
-  → 当前用户命名管道
-  → Loader 已验证的 CDP session
-  → app://-/index.html 中的 Bridge renderer 插件
-  → App Chat 唯一 composer + 一次可信 Enter
-  → 按 protocol/sessionId/turnId 读取回复 JSON
-  → 结构化结果沿原路径返回 Codex
-```
+Chat 负责规划、拆解与分析反馈；当前 Codex 负责执行与验证。两端模型独立选择。Bridge 不修改 Codex 的 Spark、Luna 或其他执行模型，不建立第二个执行任务。
 
-Loader 始终持有随机 CDP 端口和 renderer target；命令调用方无法通过 payload 指定 CDP method、JavaScript、selector、按键或坐标。Bridge 本身是受信任的本地 DOM 插件，对外只允许 `exchange` 和 `finish` 两个操作。
+调用经随包 skill、PowerShell 辅助脚本、Loader 命令客户端、当前用户命名管道和 Loader 持有的 CDP 进入 renderer。renderer 使用 App 自有 Chat 客户端后台收发。它不打开 Chat 页面，不操作 Chat 输入框，不写 SQLite，不额外建立 MCP 或常驻服务。
 
-## 安装
+## 安装条件
 
-前置条件：支持 **schemaVersion 2 随包 skill** 的 Windows 原生 Codex Script Loader 已安装，Codex Desktop 由该 Loader 管理启动。旧的 `0.5.9` 安装副本不一定具备此能力；本次没有修改版本号，因此不能仅凭版本号判断兼容性。
+用户只需通过兼容 Loader 安装一个 GitHub 插件 ZIP。renderer、skill 与脚本同包管理。需要的 Loader 能力包括：
 
-在 Loader 的插件安装界面选择 `bridge-0.1.0.zip`，确认“安装并启用”即可。预览会注明包含 `bridge-chat` skill；无需再到 Codex 插件管理安装第二个包，也无需手动复制 skill。开发者可先在仓库根目录运行 `npm run check`，生成 `dist/bridge-0.1.0.zip`；`dist/loader-plugin` 是同一包的文件夹形式。
+- schema-v2 随包 skill 与统一更新／回滚；
+- 插件设置页及作用域存储；
+- 通用输入区控件、可见说明准备；
+- 原生提交接受回执与正式 host/task 绑定；
+- 三操作 allowlist 与当前用户命令客户端。
 
-Loader 在当前用户的 `.agents/skills/bridge-chat` 建立指向已安装包内 skill 的受管目录入口，正文和 references 只有一份。插件禁用时移除入口，启用时恢复；更新和回滚直接使用同一包的内容。移除插件仍使用 Loader 可恢复的隔离流程，不删除你的普通会话或其他 skill。
+最低要求为原生 Windows Loader **0.5.11**。此前实测使用的接口补丁已纳入该版本，公开 0.5.10 不能作为兼容基线。先更新 Loader，再更新 Bridge 并检查诊断；运行时 App 适配仍可能因后续 App 更新而变化。
 
-重复选择同 ID 的 ZIP 会进入替换预览，保留原有启用状态；替换会覆盖该插件的本地修改，需在同一次确认中明确同意。若 skill 入口已有手工安装内容，Loader 会报冲突并保留文件，不会自动覆盖。此前单独安装的 Codex skill 插件属于独立安装，需要一次性从其原管理入口移除，Loader 不擅自删除它。
+## 设置默认值
 
-安装后在 Loader 列表核对“随包 skill · 已就绪”。Codex 的发现机制会检测 skill 变化；下一轮仍未出现时再检查或重启，不要重复安装。磁盘入口就绪不等于当前已开始的 Codex turn 已刷新技能列表。
+模型选择按账户目录的具名当前版本分组，不重复显示“最新”别名。当前已观察到的目录中，GPT‑5.6 Sol 包含即时、中、高、极高和 Pro；其中 Pro 使用 `gpt-5-6-pro`。GPT‑6 Pro 独立列出，使用 `gpt-6-pro`，没有独立思考参数。目录可随账户变化，不能把两种 Pro 相互替代；目录识别不等于已完成真实生成验收。
 
-插件列表中应只出现一个 Bridge：`dev.codex-chat-bridge`。
+在 Loader 设置中的 Bridge 页面调整默认值，更改会自动保存，无需点击保存按钮：
 
-## 通过 Loader 自动更新
+| 设置 | 默认值 | 可选范围 |
+| --- | --- | --- |
+| 新任务启用协作 | 关闭 | 开／关 |
+| Chat 模型／模式 | 未选择 | 当前账户目录及适配支持的选项 |
+| 思考程度 | 支持时优先选择 Medium／中 | 由模型实际选项决定 |
+| 业务轮数／批 | 3 | 1–8 |
+| 单次读取窗口 | 90 秒 | 30／60／90 秒 |
+| 单条回复累计期限 | 15 分钟 | 1–60 分钟 |
+| 验收完成后的清理 | 删除 | 删除／保留 |
 
-发布地址为 [GitHub Releases](https://github.com/JHees/chatgpt-codex-bridge/releases)。每个正式版本提供 `bridge-版本号.zip` 和同名 `.sha256` 文件。不要把 GitHub 自动生成的 “Source code” ZIP 当成插件包；它没有已构建的 renderer。
+Pro 是用户显式选择（或继承已保存的 Pro 默认值），不是自动升档。无独立思考参数的模式显示 Pro，并注明没有独立思考参数，发送时省略该参数。用户切换模型时，优先使用设置中的默认档位；没有保存的默认档位时沿用当前选择，否则优先中等。目标模型不支持该值时，在即时、中、高、极高的已验证选项中选择最近值，距离相同时选较低值。Pro 不参与距离匹配；只有明确选择 Pro 选项或 Pro-only 模型，或保留同一已保存 Pro 默认值时才会使用。模型失效时暂停，不静默换模型。刷新模型目录不发起生成请求。
 
-1. 首次安装一个包含更新声明的 Bridge ZIP。以前安装的包如果显示“未提供更新源”，需要手动选择新 ZIP 替换一次，之后才有更新入口。
-2. 在 Loader 的插件管理页，对 Bridge 启用“自动更新”；该选项默认关闭。也可先使用“检查更新”。
-3. Loader 检查此公开仓库的最新正式 Release，仅对更高版本执行更新，校验 ZIP 和 `.sha256` 后定向重载。skill 与插件共用一个包，随更新一起变化。
+默认值只应用于新任务。任务覆盖值与 session 仅保存在当前插件实例；模型、预算和等待策略在可见说明准备时冻结，原生提交确认后绑定正式任务。
 
-插件有本地修改或新版本增加权限时，Loader 会要求确认。被禁用的插件不会自动启用；更新失败按 Loader 的事务流程回滚。该能力要求当前 Loader 自身支持 schema-v2 随包 skill，不会替代 Loader 原生程序升级。
+## 当前任务控制
 
-只推送源码或通过普通 CI 不会产生可检测的新版本；维护者还必须发布匹配 `vX.Y.Z` 标签的正式 Release。首个标签发布前，可从 Actions 下载测试包，但 Loader 没有 Release 可更新。发布步骤见 [RELEASING.md](RELEASING.md)。
+按钮挂载到 Loader 识别的原生输入区控制行中，紧邻上下文指示器／模型选择区。无法可靠定位时报告不可用，不插入其他输入框。最终实机布局仍须按验收记录核对。
 
-## 日常使用
+点击输入区按钮会打开贴近按钮的小型非模态选择窗口，而不是完整设置对话框。常驻选项只有当前任务的协作开关、模型和思考程度；修改立即作用于当前任务，不改写全局默认值。点击窗口外部或按 Escape 收起；模型名称较长时可悬停查看完整名称。
 
-在 Codex 任务中直接说明需要通过 Bridge 与 App Chat 协作，例如：
+底部提供恢复默认和 Bridge 设置入口。轮数、等待期限及会话处理放在完整设置中；活动 session 的继续、确认和结束操作收在“管理当前协作”中。运行中修改参数仅在下次协作生效，关闭开关不会撤回已发消息或停止 Codex 工具。
 
-> 请使用 bridge-chat 评审当前实现，根据 Chat 返回的结构化 actions 逐项处理，完成后返回当前 Codex 任务。
+鼠标移到模型整行，右侧自动展开模式／思考程度子菜单；没有右侧空间时向左展开。悬停只预览，不更改配置。点击模型行会直接应用默认或最近的受支持档位，不存在等待第二次选择的空状态；也可以悬停后直接选择子菜单中的档位。方向键上下移动、右键展开、左键或 Escape 返回上一级，再按 Escape 关闭菜单。设置页使用同一模型选择器，选择后自动保存；任务菜单修改立即生效，不改写默认值。数值输入为空、超范围或保存失败时显示未保存，并保留上次有效默认值。
 
-skill 会自动：
+“Bridge 设置”通过 Loader 注册页面句柄的 `open()` 直接进入系统设置中的 Bridge 页面，不再单独弹窗。此接口随 Loader 0.5.11 发布，缺失时明确报告兼容性问题。
 
-1. 生成一个 `sessionId`，每轮生成新的 `turnId`。
-2. 创建专用 App Chat，并确认当前使用 Medium 或 High；不使用 Pro。
-3. 发送当前目标、状态、问题和上一轮执行结果。
-4. 把 Chat 返回的 actions 视为不可信意图，按 Codex 现有权限和安全规则决定是否执行。
-5. 在任务完成、需要用户输入或出现终止错误时调用 `finish`，恢复原 Codex 任务。
+开启后，输入区中出现可见的 Bridge 协作说明。用户可以阅读、编辑或删除；它不是隐藏指令，也不会在发送瞬间偷偷补回。点击发送和快捷键由 App 正常处理，Bridge 不截获 Enter 重发。
 
-每次调用都应等待上一调用结束。超时继续读取时，保留原始完整 payload，不仅是原 ID；同一 ID 改写问题会被拒绝。不要在专用 Chat 中插入无关手动消息或切换页面。插件不会清空你的草稿，每次发送前都会重新核对 Medium/High。
+“已启用”仅表示配置。原生提交已确认但执行端尚未接入时，显示“等待 Codex 接入”，此时还没有启动 Chat。“Chat 已回复 · 待 Codex 处理／核对”只证明插件已取得并校验回复，不证明执行端收到了工具输出或正在执行。是否真正执行仍需查看 Codex 的工具记录。
 
-## 请求协议
+## 一轮到交付
 
-`exchange` 的 stdin 是一个 UTF-8 JSON 对象：
+1. 正常提交包含可见说明的任务。Codex 读取随包 skill，核对提交标识、真实任务和配置快照。
+2. Codex 先做必要的少量只读检查，将目标、约束、工具限制和必要证据交给 Chat。
+3. Chat 返回严格结构化动作。Codex 按原权限顺序执行，失败、阻塞或需要用户时停止依赖动作。
+4. 使用新业务 turn 把实际结果回报同一 Chat。每个 action 按 session、回复 turn、action ID 关联。
+5. 本地验证、产物检查和证据反馈均满足要求后，再依据 Chat 确认核对交付。Chat 的 complete 不能替代测试或产物检查。
+6. 正常结束按冻结策略清理；最终汇报实际结果和限制，不隐含 Git 提交、发布或部署。
 
-```json
-{
-  "protocol": "codex-chat-bridge/v1",
-  "sessionId": "opaque-session-id",
-  "turnId": "turn-1",
-  "kind": "request",
-  "objective": "审查当前实现",
-  "state": {
-    "phase": "verify",
-    "summary": "代码已构建，正在验收",
-    "completed": ["单元测试通过"],
-    "blockers": []
-  },
-  "message": "请给出下一步验证动作。",
-  "actionResults": []
-}
-```
+一般任务使用相应证据：文档核对内容与产物，数据核对来源和统计，外部操作核对真实记录，不强行套用代码测试。
 
-Chat 必须返回唯一的 `codex-bridge-response-v1` fenced JSON block：
+## 等待、预算与异常
 
-```json
-{
-  "protocol": "codex-chat-bridge/v1",
-  "sessionId": "opaque-session-id",
-  "turnId": "turn-1",
-  "status": "continue",
-  "summary": "需要再验证一次打包产物。",
-  "actions": [
-    {
-      "id": "a1",
-      "type": "verify",
-      "instruction": "核对构建产物和已安装插件的内容。",
-      "expectedResult": "文件数量和 SHA-256 一致。"
-    }
-  ]
-}
-```
+Bridge 会自动规范化含义明确的小偏差：普通 JSON 代码块或裸 JSON、冗余的 `kind: response`，以及 investigate/research/analyze/analyse/synthesize/summarize 等研究类动作名称。研究类动作统一为 inspect，保留具体指令和预期结果；不会凭名称增加权限。未知操作、错误会话 ID、多份相互竞争的回复、缺失字段和错误的完成条件仍拒绝。首次请求和唯一一次修复请求都提供完整动作协议，修复会指出具体字段错误，不只是重复“格式不对”。
 
-`continue` 必须有 1–8 个 actions；`complete` 不能有 actions；`needs_user` 只能有一个 `ask_user` action。未知字段、ID 不匹配、多个协议块或状态不变式会被拒绝。
+读取窗口不是整条回复的总期限。同 turn 续读既不发送新消息，也不计新业务轮数，更不重置累计时间。随包脚本默认在一个附着的工具进程中自动进行分段读取和一次协议修复，直到回复、暂停或错误才返回；每个 Loader 调用仍是短窗口，不会一次占住管道十五分钟。执行端必须等待工具进程完成，而不是把中途的空输出当成失败。
 
-## 手动调用
+到达累计期限后暂停；迟到结果只能暂存，用户明确“继续等待”后才交给执行端。业务批次用完后，后续证据反馈和最终确认也需要下一批预算，不能额外偷发一轮。
 
-通常应使用 `bridge-chat` skill。需要排查时，可以手动调用 Loader 客户端：
+关闭开关禁止新业务发送及格式修复，不撤回已发消息或停止 Codex 工具。切换任务不会改变已绑定会话归属。另一个任务请求时返回占用，不自动排队或抢占。
 
-```powershell
-$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-[Console]::InputEncoding = [Text.UTF8Encoding]::new()
-$pointerPath = Join-Path $env:LOCALAPPDATA 'Programs\CodexScriptLoader\active.json'
-$pointer = Get-Content -Raw -LiteralPath $pointerPath | ConvertFrom-Json
-$command = Join-Path (Split-Path $pointerPath) "versions\$($pointer.version)\$($pointer.rid)\CodexScriptLoader.Command.exe"
-if (-not (Test-Path -LiteralPath $command -PathType Leaf)) { throw 'Loader command client is missing' }
-$bridgeSessionId = [guid]::NewGuid().ToString('N')
+格式错误最多修复一次；不明确的发送不重试。模型／权限／额度错误立即停止，不为继续流程而替换模型。连续反馈无进展时应要求不同检查路径；没有可行路径就暂停。
 
-$request = @{
-  protocol = 'codex-chat-bridge/v1'
-  sessionId = $bridgeSessionId
-  turnId = [guid]::NewGuid().ToString('N')
-  kind = 'request'
-  objective = '验证 Bridge'
-  state = @{ phase = 'verify'; summary = '手动验证'; completed = @(); blockers = @() }
-  message = '请返回 complete，不包含 actions。'
-  actionResults = @()
-} | ConvertTo-Json -Depth 8 -Compress
+“等待 Codex 续读修复回复”表示 Chat 已返回内容，但协议需要一次格式修复，不等于连接失败。执行端先等待运行中的工具取得完整结果，再对同一请求续读；不重新提交业务消息。工具的暂时空输出不能判定为调用失败。
 
-$request | & $command plugin invoke --id dev.codex-chat-bridge --operation exchange
-```
+生成未结束、用户手动介入或归属不明确时保留会话。删除失败保留准确目标，可明确重试或保留。插件重载和 App 重启不恢复、不重发、不清扫历史。
 
-完成后恢复原 Codex 任务：
+## 手动诊断
 
-```powershell
-(@{ sessionId = $bridgeSessionId } | ConvertTo-Json -Compress) |
-  & $command plugin invoke --id dev.codex-chat-bridge --operation finish
-```
+设置页底部的“诊断”是标准设置行右侧的紧凑按钮，检查后台连接、模型目录和兼容性，不发送 Chat 生成请求。
 
-stdout 始终是版本化 JSON envelope：
+需要排查时先阅读 [本地操作与业务协议](../skills/bridge-chat/references/protocol.md)，使用随包 `invoke-bridge.ps1` 调用只读 `status`。脚本从已验证 Loader 安装的 `active.json` 定位客户端，通过 stdin 发送 UTF-8 JSON，保留命令信封，不执行 Chat 文本。
 
-```json
-{
-  "version": 1,
-  "requestId": "opaque-id",
-  "ok": true,
-  "result": {},
-  "error": null
-}
-```
+在执行工具已有的 PowerShell 7 中直接调用 helper，使用 `-PayloadJson` 传入序列化对象；不要嵌套启动 Windows PowerShell 5。跨进程标准输入与 PowerShell 对象管道不同，前者需要显式 `-Stdin`。
 
-## 错误处理
+`LOADER_ACCESS_DENIED` 表示任务工具无法读取或启动已安装 Loader，不表示安装文件损坏。执行端应为同一 helper 和参数申请正常工具授权；无法获得授权时报告“尚未连接所选 Chat”并暂停。不要重装 Loader、改变目录权限、切换模型或把独立执行结果当作协作成功。
 
-- `PROTOCOL_REPAIR_REQUIRED`：使用完全相同的 payload 重新调用一次 `exchange`，用于发送唯一一次协议修复请求。
-- `REPLY_TIMEOUT`：可使用相同 `sessionId` 和 `turnId` 继续读取，不得发送新消息。
-- `COMMAND_BUSY` / `CALL_BUSY` / `TURN_PENDING` / `SESSION_BUSY`：已有调用、轮次或 session 未结束；不要并行发起第二条收发链路。
-- `TURN_CONFLICT`：同一轮次的 payload 被改变；保留原请求继续读取，不可用原 ID 换问题。
-- `COMPOSER_NOT_EMPTY` / `CHAT_BUSY` / `CHAT_CONFIGURATION_REQUIRED`：先处理草稿、生成状态或 Medium/High 配置；不要自动清空用户输入。
-- `SEND_UNCERTAIN`：立即停止，不得自动重发。
-- `PROTOCOL_INVALID` / `DOM_AMBIGUOUS` / `BRIDGE_FAILED`：本 session 停止发送；身份仍可确认时可调用 `finish`。
-- `SESSION_LOST` 或命令客户端/管道本身超时：停止并报告，不假定消息未发送，也不自动新建 session 重发。
-- `RESTORE_REQUIRED`：手动返回原 Codex 任务，不点击不确定的侧边栏项。
+新任务没有正式 ID 或说明没有接受回执时，手动调用也不能绕过绑定。缺失结果或命令超时不代表“没有发送”；先保留原身份，按协议的 `status.read` 查询原 session/turn 已校验的缓存回复，不新建 turn 猜测重试。读回不发消息、不修复协议、不删除会话，也不能自动重复已执行的动作；已提交反馈的旧回复只返回 accounted 状态。实例重载后不可恢复。
 
-## 已知边界
-
-- 仅支持 Windows 原生 Loader。
-- 同一时刻只支持一个 Bridge session。
-- 只支持中文和英文的 App Chat 导航与模型配置标签。
-- 插件重载、Codex 重启或用户导航可能使内存 session 丢失。
-- 本地 Codex SQLite 不是 App Chat 消息源，Bridge 不读写这些数据库。
-- 页面仍是 Codex 的内部实现，导航、编辑消息动作或布局变化可能需要适配；它不是官方稳定的 Chat API。
-- 生成结束依赖“停止生成控件消失 + 内容稳定”，不是服务端完成事件。完全无结构的普通回复可能超时，不能保证所有格式错误都能触发自动修复。
-- `finish` 核对的是 Back 控件和 Bridge 消息离开当前页面；原任务的返回目的地由 App 自己管理，并没有独立校验原任务 ID。
-- 本次源码检查和历史实机验收的区别见 [VALIDATION.md](VALIDATION.md)。构建不等于已热更新运行副本。
+固定等待脚本不是后台唤醒服务：Codex 的当前 turn 必须仍在运行并等待工具。已经结束的 Codex turn 不会因 Chat 后来回复而自行恢复。

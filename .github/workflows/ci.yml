@@ -76,7 +76,7 @@ jobs:
           $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
           [Console]::InputEncoding = [Text.UTF8Encoding]::new()
           $version = $env:RELEASE_TAG.Substring(1)
-          $notes = 'Windows native Loader with schema-v2 bundled-skill and host-command support is required. Install the bridge ZIP once; it includes the bridge-chat skill. Chat currently uses the foreground App UI with Medium or High reasoning. Background sending, automatic Chat deletion and Bridge behavior settings are not included. See the repository usage guide for compatibility and update instructions.'
+          $notes = 'Background App Chat planning with per-task controls, autosaved settings, bounded waiting, owned-session cleanup and tolerant structured replies. One ZIP includes renderer and bridge-chat skill. Validated: GPT-5.6 Sol Medium -> Luna, three research rounds with actual tools and final delivery. Coding, Spark and Pro combinations are not fully accepted. Requires native Windows Loader 0.5.11 or later with schema-v2 bundled skills, host commands, settings page navigation, composer accessories, editable context and native submission receipts. The live-tested candidate interfaces are included in Loader 0.5.11; update Loader first. Check diagnostics; Bridge does not upgrade Loader. See docs/RELEASE-0.1.1.md and docs/USAGE.md in the repository. Local modifications or new permissions may require update confirmation.'
           gh release create $env:RELEASE_TAG "dist/bridge-$version.zip" "dist/bridge-$version.zip.sha256" --verify-tag --draft --title "Bridge $version" --notes $notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false --latest

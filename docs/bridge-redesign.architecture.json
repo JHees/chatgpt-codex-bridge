@@ -2,131 +2,205 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Bridge vNext：Codex App 内 Chat 极简协作桥",
+    "title": "Bridge：后台规划与执行协作",
     "locale": "zh-CN",
-    "output": "bridge-redesign.architecture.html",
     "quality_profile": "showcase",
-    "viewBox": [1380, 760],
-    "views": [
-      {
-        "id": "request-path",
-        "label": "请求主链路",
-        "focus": ["codexTask", "bridgeSkill", "commandClient", "userPipe", "loaderHost", "rendererPlugin", "appChat"],
-        "note": "从 Codex 状态请求一路进入同一主 renderer 的 App Chat。"
-      },
-      {
-        "id": "trusted-send",
-        "label": "一次可信发送",
-        "focus": ["loaderHost", "rendererPlugin", "appChat"],
-        "note": "插件聚焦 composer；Loader 只代发一次固定 Enter，再恢复同一 exchange。"
-      },
-      {
-        "id": "return-path",
-        "label": "结果与错误返回",
-        "focus": ["appChat", "rendererPlugin", "returnEnvelope", "codexTask"],
-        "note": "按 protocol + sessionId + turnId 匹配可见 JSON；不猜测、不自动重发。"
-      }
-    ]
+    "viewBox": [
+      1380,
+      800
+    ],
+    "output": "bridge-redesign.architecture.html"
   },
   "components": [
     {
-      "id": "codexTask",
+      "id": "executorTask",
       "type": "frontend",
-      "label": "Codex 任务",
-      "sublabel": "状态、目标与执行结果",
-      "tag": "单活动 session",
-      "pos": [30, 260],
-      "size": [150, 76]
+      "label": "当前 Codex 任务",
+      "sublabel": "执行、验证与交付",
+      "tag": "不改变执行模型",
+      "pos": [
+        80,
+        80
+      ],
+      "size": [
+        260,
+        90
+      ]
     },
     {
-      "id": "bridgeSkill",
+      "id": "skillClient",
       "type": "backend",
-      "label": "bridge-chat skill",
-      "sublabel": "构造与消费结构化协议",
-      "pos": [220, 260],
-      "size": [160, 76]
+      "label": "随包 skill 与命令客户端",
+      "sublabel": "status / exchange / finish",
+      "tag": "结构化调用",
+      "pos": [
+        560,
+        80
+      ],
+      "size": [
+        260,
+        90
+      ]
     },
     {
-      "id": "commandClient",
+      "id": "nativeLoader",
+      "type": "security",
+      "label": "原生 Loader",
+      "sublabel": "当前用户管道 · CDP 所有权",
+      "tag": "操作白名单",
+      "pos": [
+        1040,
+        80
+      ],
+      "size": [
+        260,
+        90
+      ]
+    },
+    {
+      "id": "cooperationCore",
+      "type": "backend",
+      "label": "Bridge 协作控制",
+      "sublabel": "任务绑定 · 预算 · 等待 · 幂等",
+      "tag": "单活动会话",
+      "pos": [
+        1040,
+        365
+      ],
+      "size": [
+        260,
+        90
+      ]
+    },
+    {
+      "id": "nativeChatAdapter",
+      "type": "backend",
+      "label": "App Chat 适配器",
+      "sublabel": "模型目录 · 消息与父节点关联",
+      "tag": "不切换页面",
+      "pos": [
+        560,
+        365
+      ],
+      "size": [
+        260,
+        90
+      ]
+    },
+    {
+      "id": "plannerChat",
       "type": "external",
-      "label": "Loader 命令客户端",
-      "sublabel": "stdin / stdout JSON",
-      "tag": "≤ 64 KiB",
-      "pos": [420, 260],
-      "size": [160, 76]
+      "label": "专用 Chat 规划会话",
+      "sublabel": "用户选择非 Pro 或 Pro",
+      "tag": "协议意图不是授权",
+      "pos": [
+        80,
+        365
+      ],
+      "size": [
+        260,
+        90
+      ]
     },
     {
-      "id": "userPipe",
-      "type": "messagebus",
-      "label": "当前用户命名管道",
-      "sublabel": "plugin invoke",
-      "pos": [620, 260],
-      "size": [150, 76]
-    },
-    {
-      "id": "loaderHost",
-      "type": "security",
-      "label": "Loader",
-      "sublabel": "验证目标并持有 CDP",
-      "tag": "120 秒总超时",
-      "pos": [810, 260],
-      "size": [150, 76]
-    },
-    {
-      "id": "rendererPlugin",
-      "type": "backend",
-      "label": "Bridge renderer 插件",
-      "sublabel": "exchange / finish",
-      "tag": "dom + trusted-input",
-      "pos": [1000, 260],
-      "size": [165, 76]
-    },
-    {
-      "id": "appChat",
+      "id": "taskControls",
       "type": "frontend",
-      "label": "Codex App 内 Chat",
-      "sublabel": "app://-/index.html",
-      "tag": "Medium / High",
-      "pos": [1205, 260],
-      "size": [160, 76]
+      "label": "设置页与任务按钮",
+      "sublabel": "默认值 · 可见说明 · 明确继续",
+      "tag": "配置与活动状态分离",
+      "pos": [
+        1040,
+        650
+      ],
+      "size": [
+        260,
+        90
+      ]
     },
     {
-      "id": "returnEnvelope",
-      "type": "security",
-      "label": "结构化结果 / 稳定错误",
-      "sublabel": "同一路径返回 Codex",
-      "tag": "不自动重发",
-      "pos": [580, 500],
-      "size": [220, 82]
+      "id": "pauseReturn",
+      "type": "messagebus",
+      "label": "暂停或错误返回",
+      "sublabel": "同 turn 续读 · 终态停止",
+      "tag": "不重发 · 不降级",
+      "pos": [
+        560,
+        650
+      ],
+      "size": [
+        260,
+        90
+      ]
     }
   ],
   "connections": [
-    { "id": "taskToSkill", "from": "codexTask", "to": "bridgeSkill", "label": "状态 + 目标", "variant": "emphasis", "labelDy": -32 },
-    { "id": "skillToClient", "from": "bridgeSkill", "to": "commandClient", "label": "exchange / finish", "labelDy": -32 },
-    { "id": "clientToPipe", "from": "commandClient", "to": "userPipe", "label": "有界 JSON", "labelDy": -32 },
-    { "id": "pipeToLoader", "from": "userPipe", "to": "loaderHost", "label": "allowlist", "labelDy": -32 },
-    { "id": "loaderToPlugin", "from": "loaderHost", "to": "rendererPlugin", "label": "Runtime.evaluate", "labelDy": -32 },
-    { "id": "pluginToChat", "from": "rendererPlugin", "to": "appChat", "label": "composer + 精确导航", "labelDy": -32 },
-    { "id": "trustedEnter", "from": "loaderHost", "to": "appChat", "label": "一次可信 Enter", "variant": "security", "fromSide": "top", "toSide": "top" },
-    { "id": "chatToReturn", "from": "appChat", "to": "returnEnvelope", "label": "协议 JSON 文本关联", "variant": "emphasis", "fromSide": "bottom", "toSide": "right", "labelDx": -28 },
-    { "id": "pluginError", "from": "rendererPlugin", "to": "returnEnvelope", "label": "SESSION_LOST 等", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
-    { "id": "returnToTask", "from": "returnEnvelope", "to": "codexTask", "label": "响应 envelope", "variant": "emphasis", "fromSide": "left", "toSide": "bottom" }
+    {
+      "id": "callSkill",
+      "from": "executorTask",
+      "to": "skillClient",
+      "label": "可见协作说明",
+      "variant": "emphasis"
+    },
+    {
+      "id": "invokeLoader",
+      "from": "skillClient",
+      "to": "nativeLoader",
+      "label": "UTF-8 JSON",
+      "variant": "emphasis"
+    },
+    {
+      "id": "invokeRenderer",
+      "from": "nativeLoader",
+      "to": "cooperationCore",
+      "label": "受控 CDP 调用",
+      "variant": "emphasis",
+      "labelDy": 90
+    },
+    {
+      "id": "nativeSendRead",
+      "from": "cooperationCore",
+      "to": "nativeChatAdapter",
+      "label": "冻结配置与 turn",
+      "variant": "emphasis"
+    },
+    {
+      "id": "planReply",
+      "from": "nativeChatAdapter",
+      "to": "plannerChat",
+      "label": "原生后台收发",
+      "variant": "emphasis"
+    },
+    {
+      "id": "userControls",
+      "from": "taskControls",
+      "to": "cooperationCore",
+      "label": "设置与明确同意"
+    },
+    {
+      "id": "pausedReply",
+      "from": "nativeChatAdapter",
+      "to": "pauseReturn",
+      "label": "等待或稳定错误码",
+      "variant": "dashed",
+      "labelDy": 90
+    }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "极简边界",
-      "items": ["只有一个 renderer 插件和一个 skill", "无 daemon、MCP、监听端口；不读本地 SQLite"]
+      "title": "执行闭环",
+      "items": [
+        "状态 → 计划 → 真实工具证据 → Chat 确认",
+        "正常完成按策略清理；返回沿原调用链"
+      ]
     },
     {
-      "dot": "emerald",
-      "title": "可信收发",
-      "items": ["插件写入唯一 composer；Loader 代发一次 Enter", "回复按三个协议字段匹配，不依赖复制按钮"]
-    },
-    {
-      "dot": "rose",
-      "title": "失败关闭",
-      "items": ["DOM 或会话身份含糊时立即停止", "结果格式错误只修复一次，发送不明确绝不重放"]
+      "dot": "amber",
+      "title": "验收边界",
+      "items": [
+        "Medium 后台两轮收发与删除已实测",
+        "Spark／Luna 与 Pro 四组合仍待逐项验收"
+      ]
     }
   ]
 }

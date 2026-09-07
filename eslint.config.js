@@ -6,6 +6,7 @@ export default tseslint.config(
     ignores: [
       ".conda/**",
       ".runtime/**",
+      "output/playwright/**",
       "node_modules/**",
       "**/dist/**",
       "coverage/**",

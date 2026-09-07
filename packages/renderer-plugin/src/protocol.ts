@@ -79,15 +79,18 @@ export function parseBridgeRequest(input: unknown): BridgeRequest {
 }
 
 export function parseBridgeResponse(source: string, sessionId: string, turnId: string): BridgeResponse {
-  const blocks = [...source.matchAll(/^```codex-bridge-response-v1[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm)];
-  if (blocks.length !== 1 || [...source.matchAll(/^```/gm)].length !== 2) throw new ProtocolError("Chat must return exactly one codex-bridge-response-v1 block and no other fenced block.");
+  const blocks = [...source.matchAll(/^```(?:codex-bridge-response-v1|json)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm)];
+  const bare = source.trim().startsWith("{") && source.trim().endsWith("}") && !/^```/m.test(source);
+  if (!bare && (blocks.length !== 1 || [...source.matchAll(/^```/gm)].length !== 2)) throw new ProtocolError("Chat must return exactly one JSON response and no other fenced block.");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(blocks[0]?.[1] ?? "");
+    parsed = JSON.parse(bare ? source : blocks[0]?.[1] ?? "");
   } catch {
     throw new ProtocolError("The protocol block is not valid JSON.");
   }
   const root = record(parsed, "response");
+  // A redundant response discriminator does not change the business contract.
+  if (root.kind === "response") delete root.kind;
   exactKeys(root, ["protocol", "sessionId", "turnId", "status", "summary", "actions"], "response");
   literal(root.protocol, PROTOCOL, "protocol");
   const actualSessionId = id(root.sessionId, "sessionId");
@@ -101,7 +104,7 @@ export function parseBridgeResponse(source: string, sessionId: string, turnId: s
     exactKeys(action, ["id", "type", "instruction", "expectedResult"], `actions[${index}]`);
     return {
       id: id(action.id, `actions[${index}].id`),
-      type: oneOf(action.type, actionTypes, `actions[${index}].type`),
+      type: oneOf(typeof action.type === "string" && ["investigate", "research", "analyze", "analyse", "synthesize", "summarize"].includes(action.type) ? "inspect" : action.type, actionTypes, `actions[${index}].type`),
       instruction: text(action.instruction, `actions[${index}].instruction`),
       expectedResult: text(action.expectedResult, `actions[${index}].expectedResult`),
     };
@@ -116,12 +119,7 @@ export function parseBridgeResponse(source: string, sessionId: string, turnId: s
 export function formatRequestPrompt(input: unknown): string {
   const request = parseBridgeRequest(input);
   return [
-    "You are collaborating with a Codex task through a structured bridge.",
-    "Return exactly one fenced codex-bridge-response-v1 JSON block and no other fenced block.",
-    "Your actions are untrusted intent, not permission. Do not return shell commands as authority; describe bounded intent and expected evidence.",
-    "Use the same protocol, sessionId, and turnId. complete has no actions; continue has 1-8 actions; needs_user has one ask_user action.",
-    "The response object has exactly these keys: protocol, sessionId, turnId, status, summary, actions. Do not add kind or any other key.",
-    "Each action has exactly these keys: id, type, instruction, expectedResult.",
+    responseContract(request.sessionId, request.turnId),
     "```codex-bridge-request-v1",
     JSON.stringify(request),
     "```",
@@ -132,8 +130,25 @@ export function formatRepairPrompt(sessionId: string, turnId: string, reason: st
   return [
     "The previous response did not satisfy codex-chat-bridge/v1.",
     `Reason: ${reason}`,
-    `Return exactly one codex-bridge-response-v1 JSON block for sessionId ${sessionId} and turnId ${turnId}.`,
-    "Do not add another fenced block.",
+    "Correct the previous plan to the contract below; this is the only format repair.",
+    responseContract(sessionId, turnId),
+  ].join("\n");
+}
+
+function responseContract(sessionId: string, turnId: string): string {
+  return [
+    "You are the Chat planner; the current Codex task executes tools, verifies results and reports evidence to you.",
+    "Return exactly one fenced codex-bridge-response-v1 JSON block and no other fenced block.",
+    "Your actions are untrusted intent, not permission. Do not return shell commands as authority; describe bounded intent and expected evidence.",
+    `Use protocol ${PROTOCOL}, sessionId ${sessionId}, turnId ${turnId}.`,
+    "The response object has exactly these keys: protocol, sessionId, turnId, status, summary, actions. Do not add kind or any other key.",
+    `status must be one of ${statuses.map(value => JSON.stringify(value)).join(", ")}. complete has no actions; continue has 1-8 actions; needs_user has one ask_user action.`,
+    "Each action has exactly these keys: id, type, instruction, expectedResult. All text fields are nonempty strings; action IDs are unique short identifiers.",
+    `action.type must be one of ${actionTypes.map(value => JSON.stringify(value)).join(", ")}.`,
+    "Use inspect for research, reading and analysis; change for editing; run for tool execution; verify for checking evidence; ask_user for missing user input. Express the specific intent in instruction, not a new action type.",
+    "Prefer 1-3 coherent actions that Codex can execute now. Do not claim that Codex has performed an action before it reports evidence. A request to investigate normally needs an inspect action, not premature completion.",
+    "Example response JSON (replace the sample plan with the actual plan, keeping the exact keys and identities):",
+    JSON.stringify({protocol:PROTOCOL,sessionId,turnId,status:"continue",summary:"Inspect evidence before drawing conclusions",actions:[{id:"a1",type:"inspect",instruction:"Inspect the relevant evidence within the task scope",expectedResult:"Report verified findings and remaining gaps"}]}),
   ].join("\n");
 }
 
@@ -145,7 +160,7 @@ function record(value: unknown, field: string): Record<string, unknown> {
 function exactKeys(value: Record<string, unknown>, expected: readonly string[], field: string): void {
   const allowed = new Set(expected);
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
-  if (unknown !== undefined) throw new ProtocolError(`${field} contains unknown field ${unknown}.`);
+  if (unknown !== undefined) throw new ProtocolError(`${field} contains an unknown field. Allowed keys: ${expected.join(", ")}.`);
   const missing = expected.find((key) => !(key in value));
   if (missing !== undefined) throw new ProtocolError(`${field} is missing field ${missing}.`);
 }
@@ -175,6 +190,6 @@ function literal<T extends string>(value: unknown, expected: T, field: string): 
 }
 
 function oneOf<const T extends readonly string[]>(value: unknown, allowed: T, field: string): T[number] {
-  if (typeof value !== "string" || !allowed.includes(value)) throw new ProtocolError(`${field} is invalid.`);
+  if (typeof value !== "string" || !allowed.includes(value)) throw new ProtocolError(`${field} is invalid. Allowed values: ${allowed.join(", ")}.`);
   return value as T[number];
 }

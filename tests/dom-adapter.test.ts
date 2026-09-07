@@ -78,7 +78,7 @@ describe("AppChatDomAdapter", () => {
       user.append(content, edit);
       const answer = document.createElement("pre");
       const value = JSON.parse(protocolJson("session-1", sends === 3 ? "turn-2" : "turn-1"));
-      if (sends === 1) value.kind = "response";
+      if (sends === 1) value.kind = "request"; // A conflicting discriminator still requires repair.
       if (sends === 2) {
         value.status = "continue";
         value.actions = [{ id: "a1", type: "verify", instruction: "Check a fixture", expectedResult: "Pass" }];
