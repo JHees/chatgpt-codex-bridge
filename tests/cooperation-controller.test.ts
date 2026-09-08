@@ -122,6 +122,9 @@ it("promotes a confirmed draft after the formal task was only read, not explicit
   f.controller.register("binding-draft", draft, snapshot);
   f.controller.status({ task });
   f.receipt({ state: "accepted", bindingId: "binding-draft", ...task, turnId: "native-turn" });
+  f.controller.status({task});
+  expect(f.config.task(task).enabled).toBe(true);
+  expect(f.sends).toHaveLength(0);
   await f.controller.exchange({ ...f.payload, task, bindingId: "binding-draft", snapshotId: snapshot.id });
   expect(f.sends).toHaveLength(1);
   expect(f.controller.status({ task }).active?.config.task).toEqual(task);
@@ -132,8 +135,23 @@ it("allows normal cleanup only after a completed local report and a matching pla
   f.port.read = async () => ({ state: "complete", text: '```codex-bridge-response-v1\n' + JSON.stringify({ protocol: PROTOCOL, sessionId: "session-a", turnId: "turn-a", status: "complete", summary: "Evidence reviewed", actions: [] }) + '\n```' });
   let deleted = false; f.port.finish = async policy => { deleted = policy === "delete"; };
   await f.controller.exchange({ ...f.payload, request: { ...f.payload.request, state: { phase: "complete", summary: "Document checked against requirements", completed: ["Document created and inspected"], blockers: [] } } });
+  expect(deleted).toBe(true); // The plugin must finish even if the executor omits finish.
+  expect(f.controller.status({task:f.task}).active).toBeNull();
+  expect(f.controller.status({task:f.task,bindingId:"binding-a",read:{sessionId:"session-a",turnId:"turn-a"}}).turn)
+    .toMatchObject({state:"response",response:{status:"complete"}});
   await expect(f.controller.finish({ task: f.task, sessionId: "session-a", policy: "delete" })).resolves.toEqual({ state: "ended", policy: "delete" });
   expect(deleted).toBe(true);
+});
+
+it("preserves the final reply and cleanup reason when automatic cleanup fails; explicit retry succeeds", async () => {
+  const f=fixture(); f.accept();
+  f.port.read=async()=>({state:"complete",text:'```json\n'+JSON.stringify({protocol:PROTOCOL,sessionId:"session-a",turnId:"turn-a",status:"complete",summary:"Verified",actions:[]})+'\n```'});
+  f.port.finish=async()=>{throw Object.assign(new Error("private details"),{code:"CLEANUP_PENDING"});};
+  const result=await f.controller.exchange({...f.payload,request:{...f.payload.request,state:{phase:"complete",summary:"Verified",completed:["Test passed"],blockers:[]}}});
+  expect(result).toMatchObject({state:"response",response:{status:"complete"}});
+  expect(f.controller.status({task:f.task}).active).toMatchObject({state:"cleanup-failed",errorCode:"CLEANUP_FAILED"});
+  f.port.finish=async()=>{};
+  await expect(f.controller.finish({task:f.task,sessionId:"session-a",policy:"delete"})).resolves.toMatchObject({state:"ended"});
 });
 
 it("rejects attempts to grant consent through command payloads", async () => {
@@ -141,4 +159,25 @@ it("rejects attempts to grant consent through command payloads", async () => {
   await expect(f.controller.exchange({ ...f.payload, allowNextBatch: true })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
   expect(() => f.controller.status({ task: f.task, continueWaiting: true })).toThrow();
   expect(f.sends).toHaveLength(0);
+});
+
+it("closes a two-turn human planning loop automatically and preserves its final recovery receipt", async () => {
+  const f=fixture();f.accept();
+  let text="协作状态：继续\n\n核对一项实际计算，并回报结果。";
+  const policies:string[]=[];
+  f.port.read=async()=>({state:"complete",text});f.port.finish=async policy=>{policies.push(policy);};
+  const plan=await f.controller.exchange(f.payload);
+  expect(plan).toMatchObject({state:"response",response:{actions:[{id:"plan",type:"plan"}]}});
+  const actual=6*7;expect(actual).toBe(42);
+  text="协作状态：建议完成\n\n计算结果与期望一致，可以交付。";
+  const feedback={...f.payload,replyToTurnId:"turn-a",request:{...f.payload.request,kind:"result",turnId:"turn-b",state:{phase:"complete",summary:"核对完成",completed:[`${actual} equals 42`],blockers:[]},actionResults:[{actionId:"plan",outcome:"succeeded",summary:"实际计算核对通过",evidence:[String(actual)]}]}};
+  const reply=await f.controller.exchange(feedback);
+  expect(policies).toEqual(["delete"]);
+  expect(f.sends).toHaveLength(2);
+  expect(f.sends[1]).toContain("42");
+  expect(f.controller.status({task:f.task,bindingId:"binding-a",read:{sessionId:"session-a",turnId:"turn-b"}}).turn).toEqual(reply);
+  await expect(f.controller.exchange(feedback)).rejects.toMatchObject({code:"SESSION_LOST"});
+  expect(f.sends).toHaveLength(2);
+  f.controller.stop();
+  expect(()=>f.controller.status({task:f.task})).toThrow();
 });

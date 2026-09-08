@@ -30,9 +30,32 @@ function block(value: unknown): string {
 describe("codex-chat-bridge/v1 protocol", () => {
   it("accepts the exact request schema and formats an explicit untrusted-intent prompt", () => {
     expect(parseBridgeRequest(request)).toEqual(request);
-    expect(formatRequestPrompt(request)).toContain("Do not return shell commands as authority");
-    expect(formatRequestPrompt(request)).toContain("Do not add kind or any other key");
-    expect(formatRequestPrompt(request)).toContain("```codex-bridge-request-v1");
+    const prompt=formatRequestPrompt(request);
+    expect(prompt).toContain(request.objective);
+    expect(prompt).toContain(request.state.summary);
+    expect(prompt).not.toContain("```codex-bridge-request-v1");
+    expect(prompt).not.toContain('"sessionId"');
+    expect(prompt).toContain("现有权限");
+  });
+
+  it("reads a human plan with a small explicit state header, without guessing completion from prose", () => {
+    const prose="1. 检查现有测试。\n2. 修复解析逻辑，保留用户修改。\n验收：运行测试并回报退出码。";
+    expect(parseBridgeResponse("协作状态：继续\n\n"+prose,"session-1","turn-1"))
+      .toMatchObject({sessionId:"session-1",turnId:"turn-1",status:"continue",actions:[{id:"plan",type:"plan",instruction:prose}]});
+    expect(parseBridgeResponse("**协作状态：建议完成**\n\n已核对提交的测试证据。","session-1","turn-1"))
+      .toMatchObject({status:"complete",actions:[]});
+    expect(parseBridgeResponse("Bridge status: needs_user\n\n请确认是否覆盖目标文件。","session-1","turn-1"))
+      .toMatchObject({status:"needs_user",actions:[{type:"ask_user"}]});
+    expect(()=>parseBridgeResponse("已经完成。接下来删除文件。","session-1","turn-1")).toThrow();
+    expect(()=>parseBridgeResponse("协作状态：继续\n\n协作状态：建议完成","session-1","turn-1")).toThrow();
+    expect(()=>parseBridgeResponse("协作状态：继续\n", "session-1","turn-1")).toThrow();
+  });
+
+  it("sends readable evidence and only introduces the planner role on the first business turn", () => {
+    const prompt=formatRequestPrompt({...request,kind:"result",actionResults:[{actionId:"plan",outcome:"succeeded",summary:"修复完成",evidence:["npm test: 12 passed, exit 0"]}]});
+    expect(prompt).toContain("npm test: 12 passed, exit 0");
+    expect(prompt).not.toContain("你是本次任务的规划伙伴");
+    expect(prompt).not.toContain(JSON.stringify(request));
   });
 
   it("rejects unknown request fields", () => {

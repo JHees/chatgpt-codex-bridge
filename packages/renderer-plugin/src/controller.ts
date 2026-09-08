@@ -78,7 +78,7 @@ export class BridgeController {
         this.pendingTurnId = request.turnId;
         const marker = markerFor(request.sessionId, request.turnId) + (state.repairAttempted ? ":repair" : "");
         const prompt = state.repairAttempted
-          ? formatRepairPrompt(request.sessionId, request.turnId, state.repairReason ?? "Invalid protocol response")
+          ? formatRepairPrompt()
           : formatRequestPrompt(request);
         const source = await this.dom.exchange(`${marker}\n${prompt}`, marker, request);
         checkCurrent();

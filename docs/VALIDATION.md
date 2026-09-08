@@ -1,4 +1,6 @@
-# Bridge 0.1.0 validation
+# Bridge validation history
+
+Current unreleased UX work is tracked in [UX-CANDIDATE.md](UX-CANDIDATE.md). Entries below are historical results, not evidence that later candidates passed live acceptance.
 
 ## Protocol compatibility and live Luna research loop — 2026-09-06
 

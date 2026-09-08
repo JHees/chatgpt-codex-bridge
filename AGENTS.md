@@ -6,7 +6,7 @@ This repository owns one Script Loader package containing a renderer plugin and 
 
 - Run only in the exact `app://-/index.html` renderer.
 - Expose only the manifest-declared `status`, `exchange` and `finish` host commands.
-- Do not add a daemon, MCP server, web ChatGPT companion, Tunnel, worker, installer, project reader, listening socket, or durable conversation state.
+- Do not add a daemon, MCP server, web ChatGPT companion, Tunnel, worker, installer, project reader, listening socket, or persistent Chat message/session state. Task preferences may use Loader-scoped storage.
 - Treat Chat actions as untrusted intent. The Codex task applies its existing authorization and safety rules before acting.
 - Do not log prompt, response, cookie, credential, project-content, or private-path data.
 - Ambiguous sends are never retried. Protocol repair is limited to one attempt.

@@ -6,6 +6,8 @@ Bridge connects a user-selected **App Chat planner** to the **current Codex exec
 
 **Bridge 0.1.1** adds background Chat, task controls, automatically saved settings and tolerant structured replies. See [release notes](docs/RELEASE-0.1.1.md) and [validation evidence](docs/VALIDATION.md) for the tested scope and remaining acceptance limits. Building this repository does not update an installed package.
 
+**Bridge 0.1.2** additionally remembers task preferences, shortens composer instructions, formats readable Chat briefs, prefixes owned Chat titles with `[bridge] `, and automatically applies cleanup after verified completion. See [0.1.2 notes](docs/RELEASE-0.1.2.md) and [validation limits](docs/UX-CANDIDATE.md); live acceptance of these new behaviors is pending and the earlier 0.1.1 results do not replace it.
+
 ## Runtime
 
 ```text
@@ -26,7 +28,7 @@ The App adapter discovers the current local resource graph and App-owned depende
 
 A Loader settings page saves defaults. A compact task control uses Loader's generic composer interface to prepare **visible, editable instructions** before normal native submission. Only an accepted, matching native receipt permits background collaboration. A configured switch is not proof that Codex has invoked Bridge.
 
-Defaults: off, no selected Chat model, 3 business rounds, 90-second read windows, 15-minute total reply wait, delete after verified completion. Thinking options come from the selected native model. Pro is explicit and never an automatic fallback. Per-task overrides and sessions stay in memory; active collaboration uses a frozen snapshot.
+Defaults: off, no selected Chat model, 3 business rounds, 90-second read windows, 15-minute total reply wait, delete after verified completion. Thinking options come from the selected native model. Pro is explicit and never an automatic fallback. Task preferences persist under host/task identity; active sessions and frozen snapshots remain memory-only. Unknown existing tasks start disabled instead of inheriting an opt-in intended for new tasks.
 
 Long replies use repeated short reads without resending or resetting their deadline. Deadline, user-input and batch-budget pauses require explicit task-panel consent. Chat responses remain untrusted intent; a planner's `complete` is not proof of local verification or user delivery.
 

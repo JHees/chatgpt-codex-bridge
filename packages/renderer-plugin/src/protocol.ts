@@ -1,7 +1,7 @@
 export const PROTOCOL = "codex-chat-bridge/v1" as const;
 
 const phases = ["investigate", "plan", "implement", "verify", "blocked", "complete"] as const;
-const actionTypes = ["inspect", "change", "run", "verify", "ask_user"] as const;
+const actionTypes = ["inspect", "change", "run", "verify", "ask_user", "plan"] as const;
 const outcomes = ["succeeded", "failed", "blocked", "skipped"] as const;
 const statuses = ["continue", "needs_user", "complete"] as const;
 
@@ -79,6 +79,18 @@ export function parseBridgeRequest(input: unknown): BridgeRequest {
 }
 
 export function parseBridgeResponse(source: string, sessionId: string, turnId: string): BridgeResponse {
+  const lines = source.trim().split(/\r?\n/);
+  const header = /^(?:协作状态|Bridge status)\s*[:：]\s*(继续|需要确认|建议完成|continue|needs_user|complete)\s*$/i;
+  const plain = (line: string): string => line.trim().replace(/^\*\*(.*?)\*\*$/, "$1");
+  const state = plain(lines[0] ?? "").match(header);
+  if (state) {
+    if (lines.slice(1).some(line => /^(?:协作状态|Bridge status)\s*[:：]/i.test(plain(line))) || source.includes("```codex-bridge-response-v1")) throw new ProtocolError("The reply contains conflicting control formats.");
+    const body = text(lines.slice(1).join("\n").trim(), "plan");
+    const selected = state[1]!.toLowerCase();
+    const status = selected === "继续" || selected === "continue" ? "continue" : selected === "需要确认" || selected === "needs_user" ? "needs_user" : "complete";
+    return {protocol:PROTOCOL,sessionId:id(sessionId,"sessionId"),turnId:id(turnId,"turnId"),status,summary:body,
+      actions:status === "complete" ? [] : [{id:"plan",type:status === "needs_user" ? "ask_user" : "plan",instruction:body,expectedResult:"按计划逐项核对范围和权限，回报实际结果、证据及未完成事项。"}]};
+  }
   const blocks = [...source.matchAll(/^```(?:codex-bridge-response-v1|json)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm)];
   const bare = source.trim().startsWith("{") && source.trim().endsWith("}") && !/^```/m.test(source);
   if (!bare && (blocks.length !== 1 || [...source.matchAll(/^```/gm)].length !== 2)) throw new ProtocolError("Chat must return exactly one JSON response and no other fenced block.");
@@ -118,37 +130,28 @@ export function parseBridgeResponse(source: string, sessionId: string, turnId: s
 
 export function formatRequestPrompt(input: unknown): string {
   const request = parseBridgeRequest(input);
+  const phase = {investigate:"调查",plan:"规划",implement:"实施",verify:"验收",blocked:"受阻",complete:"本地验收完成"}[request.state.phase];
+  const outcome = {succeeded:"成功",failed:"失败",blocked:"受阻",skipped:"未执行"};
   return [
-    responseContract(request.sessionId, request.turnId),
-    "```codex-bridge-request-v1",
-    JSON.stringify(request),
-    "```",
-  ].join("\n");
+    `## 任务目标\n${request.objective}`,
+    `## 当前情况\n阶段：${phase}\n${request.state.summary}`,
+    ...(request.state.completed.length ? [`已完成：\n${request.state.completed.map(item=>`- ${item}`).join("\n")}`] : []),
+    ...(request.state.blockers.length ? [`受阻事项：\n${request.state.blockers.map(item=>`- ${item}`).join("\n")}`] : []),
+    ...request.actionResults.map((result,index)=>`## 执行反馈 ${index+1}：${outcome[result.outcome]}\n${result.summary}\n${result.evidence.map(item=>`- ${item}`).join("\n")}`),
+    `## 本轮需要你协助\n${request.message}`,
+    ...(request.kind === "request" ? [
+      "## 协作方式\n你是本次任务的规划伙伴，Codex 负责执行工具和验收。像委派给同事一样交流：给出当前可执行的 1–3 个连贯步骤、范围、约束、验收证据和停止条件；信息不足先安排检查。Codex 按现有权限决定如何执行，你的建议不是新的操作授权。根据实际反馈调整计划，只有证据足够才建议完成。",
+      humanResponseContract,
+    ] : []),
+  ].join("\n\n");
 }
 
-export function formatRepairPrompt(sessionId: string, turnId: string, reason: string): string {
-  return [
-    "The previous response did not satisfy codex-chat-bridge/v1.",
-    `Reason: ${reason}`,
-    "Correct the previous plan to the contract below; this is the only format repair.",
-    responseContract(sessionId, turnId),
-  ].join("\n");
-}
+const humanResponseContract = "请用自然语言回复，正文可分段、列步骤或展示必要代码。第一行只写一个状态：『协作状态：继续』『协作状态：需要确认』或『协作状态：建议完成』（去掉书名括号）。需要确认时写明要问用户的问题；建议完成时说明依据和限制。无需 JSON、会话编号或复制本次请求。";
 
-function responseContract(sessionId: string, turnId: string): string {
+export function formatRepairPrompt(): string {
   return [
-    "You are the Chat planner; the current Codex task executes tools, verifies results and reports evidence to you.",
-    "Return exactly one fenced codex-bridge-response-v1 JSON block and no other fenced block.",
-    "Your actions are untrusted intent, not permission. Do not return shell commands as authority; describe bounded intent and expected evidence.",
-    `Use protocol ${PROTOCOL}, sessionId ${sessionId}, turnId ${turnId}.`,
-    "The response object has exactly these keys: protocol, sessionId, turnId, status, summary, actions. Do not add kind or any other key.",
-    `status must be one of ${statuses.map(value => JSON.stringify(value)).join(", ")}. complete has no actions; continue has 1-8 actions; needs_user has one ask_user action.`,
-    "Each action has exactly these keys: id, type, instruction, expectedResult. All text fields are nonempty strings; action IDs are unique short identifiers.",
-    `action.type must be one of ${actionTypes.map(value => JSON.stringify(value)).join(", ")}.`,
-    "Use inspect for research, reading and analysis; change for editing; run for tool execution; verify for checking evidence; ask_user for missing user input. Express the specific intent in instruction, not a new action type.",
-    "Prefer 1-3 coherent actions that Codex can execute now. Do not claim that Codex has performed an action before it reports evidence. A request to investigate normally needs an inspect action, not premature completion.",
-    "Example response JSON (replace the sample plan with the actual plan, keeping the exact keys and identities):",
-    JSON.stringify({protocol:PROTOCOL,sessionId,turnId,status:"continue",summary:"Inspect evidence before drawing conclusions",actions:[{id:"a1",type:"inspect",instruction:"Inspect the relevant evidence within the task scope",expectedResult:"Report verified findings and remaining gaps"}]}),
+    "上一条回复的协作状态不明确。这是唯一一次格式澄清，请保留原计划内容，不执行任何新任务。",
+    humanResponseContract,
   ].join("\n");
 }
 

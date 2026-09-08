@@ -1,28 +1,26 @@
-# Bridge vNext architecture
+# Bridge architecture
 
-## Distribution
-
-One `bridge-0.1.0.zip` contains the renderer and `skills/bridge-chat`, including its protocol reference. The schema-v2 manifest declares `agentSkill: "bridge-chat"` and the `agent-skills` permission. A compatible native Windows Loader manages one discoverable skill entry pointing into this installed package, so enable, disable, update, rollback, quarantine, and restore apply to both components. There is no separately installed Codex plugin or copied skill version. This does not make the skill an independent service or give the renderer arbitrary filesystem access.
+One Loader package contains the renderer and bundled skill/helper. Installation, updates and rollback manage them together.
 
 ## Runtime
 
-Bridge vNext has one request path and one return path:
+Current Codex task → bundled helper → Loader command client → current-user pipe → Loader-owned CDP → Bridge controller → App-owned Chat client.
 
-```text
-Codex task
-  -> bridge-chat skill
-  -> CodexScriptLoader.Command.exe
-  -> current-user Loader named pipe
-  -> Loader-owned, verified CDP session
-  -> dev.codex-chat-bridge in app://-/index.html
-  -> App Chat composer/navigation DOM
-  -> correlated protocol JSON text over the same path
-```
+Public operations remain status, exchange and finish. Loader validates the renderer and fixed allowlist; callers cannot supply JavaScript, selectors, ports or CDP methods.
 
-The Loader interface is business-neutral. A plugin manifest allowlists fixed operation names, and the command client carries one bounded JSON object. Loader retains the random CDP endpoint, exact renderer selection, timeout, and result envelope; no caller can choose CDP details or JavaScript.
+- Configuration and UI: scoped storage holds defaults and host/task preferences. Drafts, frozen snapshots and active sessions stay in memory. The generic composer seam binds a short editable instruction to an accepted native submission.
+- Cooperation controller: owns task binding, the single session and automatic finish after executor completion plus planner confirmation. One final completion receipt remains readable; it is not a historical journal.
+- Background session: owns immutable turns, action/result accounting, budget, read windows, cumulative deadline and one clarification. UI consent is not a host-command option.
+- App Chat adapter: discovers native assets and dependency scope; sends and reads via native message IDs, parent nodes and stream completion. It labels the owned Chat and verifies ownership before deletion.
 
-The Bridge renderer exposes only `exchange` and `finish`. On the first exchange it records the existing sidebar keys, opens a new App Chat, verifies ChatGPT mode and Medium or High reasoning, fills and focuses an empty composer, and asks Loader for one fixed trusted Enter. Loader dispatches Enter once and resumes the identical operation and payload. The plugin confirms the exact user marker and extracts reply candidates only from the visible region between that marker and the next user message. Strict protocol validation then correlates IDs. Assistant toolbar labels and syntax-highlighted element boundaries are not reply identifiers.
+## Communication and persistence
 
-One in-memory session, one in-flight invocation, and one unresolved turn are allowed. Turn payloads are immutable, completed responses are cached only behind a live identity check, and terminal failures prevent further sends. Reset invalidates outstanding waits. Later turns can reactivate the exact App Chat sidebar identity only while the sent anchor remains visible. `finish` uses the exact Back action and clears state after confirming that Chat was left; the original task destination is entrusted to App navigation. Missing or ambiguous identity produces a stable error rather than guessing or resending.
+The composer carries a short skill reference, model and configuration ID. Detailed rules live in the skill. No verified native separate-context submission middleware exists in the current Loader; the candidate does not replace global submission functions or hide injected prompt text.
 
-There is no daemon, MCP server, Tunnel, web ChatGPT surface, loopback listener, worker, project reader, settings plane, or durable recovery subsystem. Local Codex SQLite databases are explicitly outside the transport: they describe Codex tasks and tool history and are not the authoritative source for App Chat messages.
+Chat receives readable goal, progress, question and evidence sections. It replies in prose with a small explicit state header. The plugin maps a plan or question into local actions. Legacy JSON remains validated for compatibility. Chat intent is never tool authorization.
+
+Only preferences persist. Accepted Bridge submissions transfer new draft preferences to the real task; unknown existing tasks start disabled. Drafts without submission receipts have no verified migration hook. See [candidate limits](UX-CANDIDATE.md).
+
+Completion report plus Chat confirmation triggers configured cleanup. Generation, user intervention and uncertain ownership prevent automatic deletion. Cleanup failure preserves the target and reason; lost command output does not lose the latest automatic-completion reply. Reload never restores requests or scans historical Chats.
+
+No foreground Chat navigation, trusted Enter, database writes, webpage ChatGPT, daemon, MCP server, tunnel, worker or listening port participates. Old DOM modules remain inactive pending replacement acceptance; the production entry does not import them.

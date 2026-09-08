@@ -78,7 +78,7 @@ export class BridgeUi {
       try { this.api.storage.set(DEFAULTS_KEY, selected); }
       catch (error) { this.control.configuration.saveDefaults(previous); throw error; }
     });
-    const note = this.node("p", this.t("默认值用于新任务；当前任务可单独调整。重载后不会自动恢复或重发请求。", "New tasks inherit these defaults; each task can override them. Reloading never restores or resends requests.")); note.className = "bridge-note";
+    const note = this.node("p", this.t("默认值用于新任务；已有任务记住自己的开关和模型选择。重载仅恢复偏好，不恢复或重发协作请求。", "Defaults apply to new tasks; existing tasks remember their switches and model choices. Reload restores preferences, not collaboration requests.")); note.className = "bridge-note";
     root.append(form, note);
     const diagnostics = this.node("p", this.diagnosticsText()); diagnostics.dataset.bridgeDiagnostics = "true";
     const refresh = this.button(this.t("诊断", "Diagnose"), async () => {
@@ -211,12 +211,9 @@ export class BridgeUi {
   }
   private prepare(owner: ComposerIdentity): void {
     const config = this.control.prepare(owner, `snapshot-${crypto.randomUUID()}`);
-    const waiting = this.t(
-      "本次先重新读取随包 skill。exchange 脚本会自动分段等待；必须等工具进程退出。若输出丢失，按 skill 用 status 的 read 查询原 session/turn，再判断是否继续；不要让用户重新提交同一请求。",
-      "Read the installed skill again for this submission. The exchange helper waits across windows; await its tool process. If output is lost, use status read for the original session/turn as documented before deciding how to continue; do not ask for a replacement submission.");
-    const text = waiting + "\n" + this.t(
-      `Bridge 协作说明（可编辑或删除）：使用随包 bridge-chat skill。Chat 负责规划与指挥，当前 Codex 负责执行与验证；不得改变当前执行模型或权限。接入失败时报告并暂停，不能默默改为独立执行；安装目录权限不足时按 skill 申请同一调用的工具授权。先用 status 核对本说明外层 Loader context 中的 submission 标识和实际 host/task，再 exchange。配置快照 ${config.id}；Chat ${config.model.title} / ${config.model.mode} / ${config.model.effortLabel}；每批 ${config.settings.maxRounds} 轮，读取 ${config.settings.readWindowSeconds} 秒，总等待 ${config.settings.totalWaitMinutes} 分钟。后台运行，不切换页面。先咨询 Chat，顺序执行允许的动作并回报真实证据；达到预算或需要用户时暂停。Chat complete 不代表本地验收或用户交付完成。不授权提交、发布、部署或破坏性操作。`,
-      `Visible Bridge collaboration instructions (editable or removable): use the bundled bridge-chat skill. Chat plans; this Codex task executes and verifies without changing its model or permissions. If connection fails, report it and pause instead of silently proceeding alone. For installation access denial, request normal tool approval for the same call as described by the skill. First call status to confirm the submission identity in the outer Loader context and the actual host/task; then exchange. Snapshot ${config.id}; Chat ${config.model.title} / ${config.model.mode} / ${config.model.effortLabel}; ${config.settings.maxRounds} business rounds, ${config.settings.readWindowSeconds}s read windows, ${config.settings.totalWaitMinutes}min total reply wait. Run in the background without navigation. Consult Chat first, execute authorized actions in order and report real evidence. Pause at budget or user-input gates. Chat complete is not local verification or user delivery. This does not authorize commits, publishing, deployment or destructive actions.`);
+    const text = this.t(
+      `使用随包 bridge-chat skill 协作：Chat 规划，Codex 执行并回报证据；沿用现有权限，接入失败时暂停。Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}。配置 ${config.id}；其余参数由 status 读取。`,
+      `Use the bundled bridge-chat skill: Chat plans; Codex executes and reports evidence under existing permissions. Pause if connection fails. Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}. Configuration ${config.id}; read remaining parameters with status.`);
     const receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text });
     this.control.register(receipt.bindingId, owner, config);
     this.prepared.set(JSON.stringify(owner), { bindingId: receipt.bindingId, config });
@@ -295,6 +292,9 @@ export class BridgeUi {
     }
     if (active && !("draftId" in owner)) {
       const state = this.node("p", `${this.stateLabel(active.state)} · ${active.usedRounds}/${active.maxRounds} · ${this.t("修改下次生效", "Changes apply next time")}`); state.className = "bridge-quick-state"; panel.append(state);
+      for (const code of [active.cleanupReason, active.titleError]) if (code) {
+        const detail=this.node("p",code); detail.className="bridge-quick-state"; detail.setAttribute("role","status"); panel.append(detail);
+      }
       if (active.state === "repair-required") {
         const repair = this.node("p", this.t("Chat 已回复，但格式需要一次修复。Codex 应续读同一请求，不是重新提交任务。", "Chat replied, but its format needs one repair. Codex should continue the same request, not resubmit the task."));
         repair.className = "bridge-quick-state"; repair.setAttribute("role", "status"); panel.append(repair);

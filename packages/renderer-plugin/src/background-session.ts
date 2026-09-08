@@ -9,6 +9,7 @@ export interface BackgroundChatPort {
   read(messageId: string, waitMs: number): Promise<{ state: "waiting" } | { state: "complete"; text: string }>;
   finish(policy: "delete" | "retain"): Promise<void>;
   dispose?(): void;
+  diagnostics?(): { titleError: string | null };
 }
 
 interface Turn {
@@ -40,6 +41,7 @@ export class BackgroundSession {
   private last: string | undefined;
   private awaitingUser = false;
   private cleanupFailed = false;
+  private cleanupReason: string | null = null;
   private completedReport = false;
 
   constructor(readonly id: string, readonly config: Readonly<ConfigurationSnapshot>, private readonly chat: BackgroundChatPort, private readonly now: () => number = () => performance.now()) {}
@@ -80,7 +82,7 @@ export class BackgroundSession {
       if (turn.repair === "required") {
         turn.repair = "sent";
         delete turn.source;
-        turn.messageId = await this.send(formatRepairPrompt(this.id, request.turnId, turn.repairReason!));
+        turn.messageId = await this.send(formatRepairPrompt());
       }
       const remaining = turn.deadline - this.now();
       if (remaining <= 0) { turn.paused = true; return this.waitState(request.turnId, turn); }
@@ -133,6 +135,10 @@ export class BackgroundSession {
     return this.waitState(turnId, turn);
   }
   hasCompletedReport(): boolean { return this.completedReport && !this.pending && !this.busy && !this.terminal && !this.stopped; }
+  completedReply() {
+    if (!this.hasCompletedReport() || !this.last) return null;
+    return {turnId:this.last,result:{state:"response" as const,response:structuredClone(this.turns.get(this.last)!.response!)}};
+  }
   confirmUser(): void {
     if (!this.awaitingUser || this.busy || this.stopped || this.terminal) throw new BridgeError("NOT_PAUSED", "This session is not awaiting user confirmation.");
     this.awaitingUser = false;
@@ -144,7 +150,9 @@ export class BackgroundSession {
     return {
       state: this.cleanupFailed ? "cleanup-failed" : this.terminal ? "failed" : this.awaitingUser ? "needs-user" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
       usedRounds: this.used, maxRounds: this.config.settings.maxRounds, busy: this.busy,
-      errorCode: this.terminal?.code ?? null,
+      errorCode: this.cleanupFailed ? "CLEANUP_FAILED" : this.terminal?.code ?? null,
+      cleanupReason: this.cleanupReason,
+      titleError: this.chat.diagnostics?.().titleError ?? null,
       completionReported: this.completedReport,
       ...(turn ? { turnId: this.pending, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline - turn.startedAt, repair: turn.repair } : {}),
     };
@@ -167,7 +175,11 @@ export class BackgroundSession {
       await this.chat.finish(policy);
       this.stopped = true;
       this.turns.clear();
-    } catch { this.cleanupFailed = true; throw new BridgeError("CLEANUP_FAILED", "The exact session target is retained; retry cleanup or retain it explicitly."); }
+    } catch (error) {
+      this.cleanupFailed = true;
+      this.cleanupReason = error instanceof BridgeError ? error.code : "CHAT_REQUEST_FAILED";
+      throw new BridgeError("CLEANUP_FAILED", "The exact session target is retained; retry cleanup or retain it explicitly.");
+    }
     finally { this.busy = false; }
   }
 

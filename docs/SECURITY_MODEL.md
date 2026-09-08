@@ -1,31 +1,23 @@
-# Bridge vNext security model
+# Bridge security model
 
-Bridge vNext is trusted local renderer code with deliberately small authority. It coordinates one Codex task with one Chat conversation already present in the Codex desktop main renderer. It does not attempt to sandbox a malicious same-user process or treat Chat output as trusted instructions.
+Bridge is trusted local renderer code coordinating one Codex task with one dedicated App Chat. It does not sandbox arbitrary same-user code or make Chat output trusted.
 
-## Fixed boundaries
+## Fixed interface
 
-- The only external entry point is `CodexScriptLoader.Command.exe plugin invoke` over Loader's current-user named pipe.
-- The plugin manifest allowlists exactly `exchange` and `finish`; request and result JSON are each capped at 64 KiB.
-- Loader owns and validates the random loopback CDP endpoint and requires the exact `app://-/index.html` renderer. The caller cannot supply a port, target, method, selector, coordinate, key, or JavaScript source.
-- The renderer package declares only `dom` and `trusted-input`. It has no loopback WebSocket or browser page companion capability.
-- `trusted-input` is a fixed continuation handshake. After the plugin fills and focuses the semantic App Chat composer, it may request exactly one Enter key press. Loader rejects missing permission, malformed or extended directives, and a second request in the same command.
-- The resumed invocation uses the identical operation and payload. The turn marker prevents retransmission once the user message is visible; an uncertain send stops with `SEND_UNCERTAIN`.
+Only manifest-declared status, exchange and finish are callable through Loader's current-user pipe. Loader owns the random loopback CDP endpoint and exact main renderer. Payloads cannot choose ports, targets, methods, selectors or JavaScript. Command size limits and outer timeouts remain Loader-owned.
 
-## Session and DOM rules
+Settings, scoped storage and composer capabilities use the generic plugin interface. Short instructions remain editable before native submission. There is no global submission replacement, hidden authority injection, foreground Chat input, executor-model change or permission grant.
 
-- Only one in-memory Bridge session and one invocation may be active. A new turn cannot overtake an unresolved one. The same turn ID cannot change payload. Reset invalidates in-flight work; cached replies require a live session check.
-- The plugin uses exact Chinese or English labels only for navigation and Chat configuration. The composer is the unique editable textbox, independent of its localized label, and no Send button is located or clicked.
-- User turns are confirmed by their Edit action and exact leading marker. Reply candidates are bounded by the sent user message and the next user message; user quotations, composers, and hidden regions are excluded. Identical duplicate blocks are not merged. The parser, not the candidate scan, rejects malformed JSON and mismatched IDs; assistant action labels are irrelevant.
-- Navigation, renderer replacement, plugin reload, Codex restart, or loss of the dedicated Chat identity produces `SESSION_LOST`. Bridge does not guess, reopen an unrelated conversation, or resend automatically.
-- `finish` uses the exact Back action and confirms leaving Chat. It cannot independently verify the original task ID. If leaving Chat cannot be verified it returns `RESTORE_REQUIRED` and does not click a guessed sidebar item.
-- Drafts are preserved, Medium/High reasoning is checked before every new send, and errors contain structural counters rather than copied UI content. Unexpected failures, uncertain sends, and failed protocol repair stop further sending until finish.
+## Identity and intent
 
-## Structured-response trust
+An accepted native submission binds configuration to host/task. One session and one unresolved turn are active. Sent turns cannot change content or resend; reads and clarification retain the original turn. Native IDs, parent ancestry, unique final reply and full user-message ownership checks establish Chat correlation. Navigation does not change ownership; instance replacement stops collaboration.
 
-Chat must return exactly one `codex-bridge-response-v1` fenced JSON block. The schema rejects unknown fields, mismatched IDs, invalid status/action combinations, multiple blocks, and more than eight actions. One malformed reply permits only one protocol-repair turn.
+Natural-language replies require an explicit state header: completion is not inferred from prose. Legacy JSON validates IDs and fields. Plans are untrusted intent. Codex checks each step's scope, permission and actual result; code blocks are not an executable command channel.
 
-Returned actions are untrusted intent. They do not grant permissions and are never interpreted as a raw shell channel. The Codex task decides whether and how each action can be performed under the user's authorization and its existing safety rules, executes actions in order, and stops on failure, blocking, or required user input.
+## Persistence and disposal
 
-## Explicit non-goals
+Only defaults and task preferences persist. Prompts, Chat IDs, sessions and execution history do not. Unknown existing tasks start disabled. Pro remains explicit; unavailable models are not replaced.
 
-vNext has no daemon, MCP server, Tunnel, web `chatgpt.com` target, worker, project-reader service, listener, secret store, durable journal, multi-profile support, concurrent sessions, or cross-restart recovery. It cannot protect content already sent to Chat or defend a desktop account already compromised by arbitrary same-user code.
+Automatic deletion requires a completed executor report and planner confirmation, then adapter ownership/generation checks. This report is an attestation, not independent proof that tools ran. User intervention, unresolved generation or uncertain ownership prevents deletion. A [bridge] title alone never authorizes deletion. Failed cleanup preserves the exact active target; retain releases it. One latest completed reply supports lost-output recovery without resending or repeating actions.
+
+No restart recovery or historical cleanup runs. The plugin does not extract credentials, write databases, start a daemon/MCP/worker or create web ChatGPT targets. Disabling collaboration cannot retract data already sent.

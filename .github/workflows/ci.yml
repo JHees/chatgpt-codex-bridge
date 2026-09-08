@@ -63,6 +63,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bridge-package-${{ github.sha }}
@@ -76,7 +79,8 @@ jobs:
           $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
           [Console]::InputEncoding = [Text.UTF8Encoding]::new()
           $version = $env:RELEASE_TAG.Substring(1)
-          $notes = 'Background App Chat planning with per-task controls, autosaved settings, bounded waiting, owned-session cleanup and tolerant structured replies. One ZIP includes renderer and bridge-chat skill. Validated: GPT-5.6 Sol Medium -> Luna, three research rounds with actual tools and final delivery. Coding, Spark and Pro combinations are not fully accepted. Requires native Windows Loader 0.5.11 or later with schema-v2 bundled skills, host commands, settings page navigation, composer accessories, editable context and native submission receipts. The live-tested candidate interfaces are included in Loader 0.5.11; update Loader first. Check diagnostics; Bridge does not upgrade Loader. See docs/RELEASE-0.1.1.md and docs/USAGE.md in the repository. Local modifications or new permissions may require update confirmation.'
-          gh release create $env:RELEASE_TAG "dist/bridge-$version.zip" "dist/bridge-$version.zip.sha256" --verify-tag --draft --title "Bridge $version" --notes $notes
+          $notesPath = "docs/RELEASE-$version.md"
+          if (-not (Test-Path -LiteralPath $notesPath)) { throw "Missing version-specific release notes: $notesPath" }
+          gh release create $env:RELEASE_TAG "dist/bridge-$version.zip" "dist/bridge-$version.zip.sha256" --verify-tag --draft --title "Bridge $version" --notes-file $notesPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false --latest

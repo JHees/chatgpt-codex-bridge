@@ -27,6 +27,8 @@ export interface ConfigurationSnapshot {
   model: Readonly<ChatModel>;
 }
 export type PreparedConfiguration = Omit<ConfigurationSnapshot, "task">;
+export interface TaskPreferenceStore { get(key: string): unknown; set(key: string, value: unknown): unknown }
+const taskPrefix = "task-preferences-v1:";
 
 const initial: ChatSettings = { enabled: false, modelKey: null, maxRounds: 3, readWindowSeconds: 90, totalWaitMinutes: 15, cleanup: "delete" };
 
@@ -54,14 +56,14 @@ function settings(value: unknown): ChatSettings {
   return { enabled: input.enabled, modelKey: input.modelKey, maxRounds: Number(input.maxRounds), readWindowSeconds: input.readWindowSeconds as 30 | 60 | 90, totalWaitMinutes: Number(input.totalWaitMinutes), cleanup: input.cleanup as "delete" | "retain" };
 }
 
-/** One configuration source for settings and task controls; no model calls or persistence side effects. */
+/** Durable preferences only. Session state, prompts and task history never enter storage. */
 export class ChatConfiguration {
   private global: ChatSettings;
   private readonly tasks = new Map<string, ChatSettings>();
   private readonly overrides = new Set<string>();
   private catalog: ChatModel[] = [];
 
-  constructor(savedDefaults: unknown = initial) { this.global = settings(savedDefaults); }
+  constructor(savedDefaults: unknown = initial, private readonly store?: TaskPreferenceStore) { this.global = settings(savedDefaults); }
   defaults(): ChatSettings { return { ...this.global }; }
   saveDefaults(input: unknown): void { this.global = settings(input); }
   models(): ChatModel[] { return this.catalog.map(model => ({ ...model })); }
@@ -114,17 +116,35 @@ export class ChatConfiguration {
   task(identity: ComposerIdentity): ChatSettings {
     const key = taskKey(identity);
     let value = this.tasks.get(key);
-    if (value === undefined) { value = { ...this.global }; this.tasks.set(key, value); }
+    if (value === undefined) {
+      if ("draftId" in identity) value = { ...this.global };
+      else {
+        const saved = this.store?.get(taskPrefix + key);
+        if (saved !== undefined && saved !== null) {
+          const entry = record(saved);
+          if (entry.version !== 1 || !["observed", "chosen", "new"].includes(String(entry.origin))) throw new BridgeError("SAVED_TASK_INVALID", "The saved task preferences cannot be read.");
+          value = settings(entry.settings);
+          if (entry.origin !== "observed") this.overrides.add(key);
+        } else {
+          // An unrecorded existing task is not a newly-created task.
+          value = { ...this.global, enabled: false };
+          this.store?.set(taskPrefix + key, { version: 1, origin: "observed", settings: value });
+        }
+      }
+      this.tasks.set(key, value);
+    }
     return { ...value };
   }
   updateTask(identity: ComposerIdentity, patch: Partial<ChatSettings>): void {
-    this.tasks.set(taskKey(identity), settings({ ...this.task(identity), ...record(patch) }));
+    const value = settings({ ...this.task(identity), ...record(patch) });
+    this.persist(identity, value, "chosen");
     this.overrides.add(taskKey(identity));
   }
-  restoreDefaults(identity: ComposerIdentity): void { this.tasks.set(taskKey(identity), { ...this.global }); this.overrides.add(taskKey(identity)); }
+  restoreDefaults(identity: ComposerIdentity): void { this.persist(identity, { ...this.global }, "chosen"); this.overrides.add(taskKey(identity)); }
   promote(draft: { draftId: string }, task: TaskIdentity): void {
     const key = taskKey(task);
-    if (!this.overrides.has(key)) this.tasks.set(key, this.task(draft));
+    this.task(task); // Load persisted explicit choices before considering a draft.
+    if (!this.overrides.has(key)) { this.persist(task, this.task(draft), "new"); this.overrides.add(key); }
   }
   freeze(identity: TaskIdentity, id: string): Readonly<ConfigurationSnapshot> {
     return Object.freeze({ ...this.prepare(identity, id), task: Object.freeze({ ...identity }) });
@@ -138,4 +158,9 @@ export class ChatConfiguration {
     return Object.freeze({ id, settings: Object.freeze(selected), model: Object.freeze({ ...model }) });
   }
   resetTasks(): void { this.tasks.clear(); this.overrides.clear(); }
+  private persist(identity: ComposerIdentity, value: ChatSettings, origin: "chosen" | "new"): void {
+    const key = taskKey(identity);
+    if (!("draftId" in identity)) this.store?.set(taskPrefix + key, { version: 1, origin, settings: { ...value } });
+    this.tasks.set(key, value);
+  }
 }

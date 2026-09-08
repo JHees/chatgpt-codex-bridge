@@ -7,6 +7,35 @@ const catalog = { options: [
   { slug: "research-example", lane: "pro", modelTitle: "Research", selectedLabel: "Pro" },
 ] };
 
+it("persists task choices, not active sessions; only drafts inherit enabled defaults", () => {
+  const values = new Map<string, unknown>();
+  const store = { get: (key: string) => values.get(key), set: (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
+  const defaults = { ...new ChatConfiguration().defaults(), enabled: true };
+  const config = new ChatConfiguration(defaults, store);
+  const old = { hostId: "local", taskId: "old" }, draft = { draftId: "new" }, task = { hostId: "local", taskId: "new" };
+  expect(config.task(old).enabled).toBe(false);
+  expect(config.task(draft).enabled).toBe(true);
+  config.promote(draft, task);
+  config.updateTask(old, { enabled: true, maxRounds: 5 });
+  config.resetTasks();
+  const reloaded = new ChatConfiguration({ ...defaults, enabled: false, maxRounds: 8 }, store);
+  expect(reloaded.task(old)).toMatchObject({ enabled: true, maxRounds: 5 });
+  expect(reloaded.task(task)).toMatchObject({ enabled: true, maxRounds: 3 });
+  reloaded.updateTask(old, { enabled: false });
+  expect(new ChatConfiguration(defaults, store).task(old).enabled).toBe(false);
+  expect(new ChatConfiguration(defaults, store).task({ ...old, hostId: "remote" }).enabled).toBe(false);
+});
+
+it("does not accept a task preference change when storage fails", () => {
+  let fail = false;
+  const values = new Map<string, unknown>();
+  const config = new ChatConfiguration(undefined, { get: key => values.get(key), set: (key, value) => { if (fail) throw Error("storage"); values.set(key, value); } });
+  const task = { hostId: "local", taskId: "a" };
+  config.task(task); fail = true;
+  expect(() => config.updateTask(task, { enabled: true })).toThrow("storage");
+  expect(config.task(task).enabled).toBe(false);
+});
+
 it("has no implicit selected model and freezes the explicitly selected Pro option without an effort", () => {
   const config = new ChatConfiguration();
   expect(config.defaults()).toEqual({ enabled: false, modelKey: null, maxRounds: 3, readWindowSeconds: 90, totalWaitMinutes: 15, cleanup: "delete" });

@@ -38,6 +38,9 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
   private terminal: BridgeError | undefined;
   private disposed = false;
   private deletion: Promise<unknown> | undefined;
+  private titleAttempted = false;
+  private ownedTitle: string | undefined;
+  private titleError: string | null = null;
   private readonly wake = new Set<() => void>();
 
   constructor(private readonly client: AppChatClient, private readonly isCurrent: () => boolean, private readonly uuid: () => string = () => crypto.randomUUID()) {}
@@ -189,6 +192,8 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     if (nodeId !== turn.id || !reply || !Array.isArray(reply.content?.parts) || !reply.content.parts.every((part: unknown) => typeof part === "string")) throw new BridgeError("REPLY_AMBIGUOUS", "The native reply chain is incomplete or unsupported.");
     const text = reply.content.parts.join("");
     if (new TextEncoder().encode(text).length > 64 * 1024) throw new BridgeError("RESULT_TOO_LARGE", "The native reply exceeds its byte limit.");
+    await this.prefixTitle(conversation);
+    this.assertCurrent();
     turn.reply = text;
     turn.finalId = conversation.current_node;
     turn.resolved = true;
@@ -202,12 +207,34 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     if (!this.conversationId || !this.last?.resolved || [...this.sent.values()].some(turn => !turn.done)) throw new BridgeError("CLEANUP_UNSAFE", "Retain the conversation while generation or correlation is unresolved.");
     await this.check();
     this.assertCurrent();
-    this.deletion = this.client.delete(this.conversationId).catch(error => { this.deletion = undefined; throw error; });
+    this.deletion = this.client.delete(this.conversationId).then(result => {
+      if (object(result)?.error || object(result)?.success === false) throw new BridgeError("CHAT_REQUEST_FAILED", "The native deletion was rejected.");
+    }).catch(error => { this.deletion = undefined; throw error; });
     await this.bounded(this.deletion, "CLEANUP_PENDING");
     this.dispose();
   }
 
   dispose(): void { this.disposed = true; this.sent.clear(); this.last = undefined; this.notify(); }
+  diagnostics() { return { titleError: this.titleError }; }
+  private async prefixTitle(conversation: Record<string, any>): Promise<void> {
+    if (this.titleAttempted) return;
+    if (typeof conversation.title !== "string" || !conversation.title.trim()) { this.titleError = "TITLE_PENDING"; return; }
+    if (!this.client.rename) { this.titleError = "TITLE_UNSUPPORTED"; return; }
+    this.titleAttempted = true;
+    const original = conversation.title;
+    const title = original.startsWith("[bridge] ") ? original : `[bridge] ${original}`;
+    try {
+      if (title !== original) {
+        const result = await this.bounded(this.client.rename(this.conversationId!, title), "TITLE_UPDATE_UNCERTAIN");
+        if (object(result)?.error || object(result)?.success === false) throw new BridgeError("TITLE_UPDATE_FAILED", "Native title update was rejected.");
+      }
+      const checked = await this.ownedConversation();
+      if (checked.title !== title) throw new BridgeError("TITLE_UPDATE_UNCONFIRMED", "The title update was not confirmed.");
+      this.ownedTitle = title; this.titleError = null;
+    } catch (error) {
+      this.titleError = error instanceof BridgeError ? error.code : "TITLE_UPDATE_FAILED";
+    }
+  }
   private notify(): void { for (const resolve of this.wake) resolve(); this.wake.clear(); }
   private fail(code: string): void { this.terminal ??= new BridgeError(code, "The native Chat session cannot safely continue."); }
   private assertCurrent(): void {
@@ -221,6 +248,9 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     const conversation = object(await (bounded ? this.bounded(lookup, "CHAT_READ_TIMEOUT") : lookup));
     this.assertCurrent();
     const mapping = object(conversation?.mapping);
+    if (this.ownedTitle !== undefined && conversation?.title !== this.ownedTitle) {
+      this.fail("USER_INTERVENED"); this.assertCurrent();
+    }
     if (!mapping || Object.keys(mapping).length > 20_000) throw new BridgeError("APP_UNSUPPORTED", "The native conversation mapping is unsupported.");
     const users = Object.values(mapping).map(node => object(node)?.message).filter(message => message?.author?.role === "user");
     if (users.length !== this.sent.size || users.some(message => {

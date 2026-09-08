@@ -55,16 +55,15 @@ it("performs only one format repair and disabling prevents repair sends", async 
   expect(f.sent).toHaveLength(2);
 });
 
-it("repairs an unknown action with its precise validation reason and complete contract", async () => {
+it("repairs an invalid legacy reply by requesting one readable status and the original plan", async () => {
   const f=fixture();
   f.raw('```codex-bridge-response-v1\n'+JSON.stringify({protocol:PROTOCOL,sessionId:"session",turnId:"turn-1",status:"continue",summary:"Research plan",actions:[{id:"a1",type:"unknown_operation",instruction:"Check public evidence",expectedResult:"Cited findings"}]})+'\n```');
   expect((await f.session.exchange(f.request)).state).toBe("repair-required");
   f.reply();
   expect((await f.session.exchange(f.request)).state).toBe("response");
-  expect(f.sent[1]).toContain("actions[0].type");
-  expect(f.sent[0]).toContain('"inspect", "change", "run", "verify", "ask_user"');
-  expect(f.sent[1]).toContain('"inspect", "change", "run", "verify", "ask_user"');
-  expect(f.sent[1]).toContain("expectedResult");
+  expect(f.sent[1]).toContain("唯一一次格式澄清");
+  expect(f.sent[0]).toContain("协作状态：继续");
+  expect(f.sent[1]).toContain("协作状态：建议完成");
   expect(f.sent).toHaveLength(2);
 });
 

@@ -188,7 +188,8 @@ it("prepares visible instructions once, then never re-adds a user-deleted contex
   vi.useFakeTimers();
   const f = fixture(true); await Promise.resolve(); await vi.advanceTimersByTimeAsync(1000);
   expect(f.preparations).toHaveLength(1);
-  expect(f.preparations[0]).toHaveProperty("text", expect.stringContaining("Visible Bridge collaboration instructions"));
+  expect(f.preparations[0]).toHaveProperty("text", expect.stringContaining("Use the bundled bridge-chat skill"));
+  expect((f.preparations[0] as {text:string}).text.length).toBeLessThan(400);
   f.edit(); await vi.advanceTimersByTimeAsync(5000);
   expect(f.preparations).toHaveLength(1);
 });
@@ -233,7 +234,8 @@ it("autosaves each valid field, ignores duplicates and keeps existing task choic
   expect(f.writes).toHaveLength(2);
   expect(f.configuration.defaults()).toMatchObject({enabled:true,maxRounds:5});
   expect(f.configuration.task({hostId:"local",taskId:"task-a"})).toEqual(before);
-  expect(f.configuration.task({hostId:"local",taskId:"new-task"})).toMatchObject({enabled:true,maxRounds:5});
+    expect(f.configuration.task({draftId:"new-draft"})).toMatchObject({enabled:true,maxRounds:5});
+    expect(f.configuration.task({hostId:"local",taskId:"unrecorded-existing-task"})).toMatchObject({enabled:false,maxRounds:5});
   rounds.value = ""; f.fire(rounds,"input");
   expect(f.writes).toHaveLength(2);
   expect(rounds.getAttribute("aria-invalid")).toBe("true");

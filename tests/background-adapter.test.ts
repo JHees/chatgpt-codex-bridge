@@ -5,10 +5,13 @@ import type { AppChatClient } from "../packages/renderer-plugin/src/app-chat-run
 it("uses the explicitly selected native model without a fabricated Pro effort, and reads the correlated final reply", async () => {
   let invocation: NativeCompletionInput | undefined;
   let deleted = false;
+  let title = "原始任务标题";
+  const renamed: string[] = [];
   const client: AppChatClient = {
     models: async () => ({ options: [] }),
     startCompletionStream: async input => { invocation = input as NativeCompletionInput; invocation.onRequestStart(); },
-    get: async () => ({ current_node: "assistant-1", mapping: {
+    rename: async (id, next) => { expect(id).toBe("owned-chat"); renamed.push(next); title=next; },
+    get: async () => ({ title, current_node: "assistant-1", mapping: {
       "user-1": { parent: "root", message: { id: "user-1", author: { role: "user" }, content: { parts: ["Request"] } } },
       "assistant-1": { parent: "user-1", message: { id: "assistant-1", author: { role: "assistant" }, end_turn: true, content: { parts: ["Reply"] } } },
     } }),
@@ -23,6 +26,9 @@ it("uses the explicitly selected native model without a fabricated Pro effort, a
   invocation!.onUpdate({ type: "message", conversationId: "owned-chat", message: { id: "assistant-1" } });
   invocation!.onComplete({ reason: "done" });
   expect(await adapter.read(id, 30_000)).toEqual({ state: "complete", text: "Reply" });
+  expect(renamed).toEqual(["[bridge] 原始任务标题"]);
+  expect(await adapter.read(id, 30_000)).toEqual({ state: "complete", text: "Reply" });
+  expect(renamed).toHaveLength(1);
   await adapter.finish("delete");
   expect(deleted).toBe(true);
 });
@@ -54,6 +60,36 @@ it("bounds deletion and keeps one in-flight delete across explicit retries", asy
     expect(deletes).toBe(1); completeDelete(); await retry;
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
+});
+
+it.each(["prefixed", "rename-failure", "manual-rename", "delete-rejected"])("keeps naming and cleanup safe: %s",async mode=>{
+  let native!:NativeCompletionInput;
+  let title=mode === "prefixed" ? "[bridge] Existing title" : "Original title";
+  let renames=0, deletes=0;
+  const client:AppChatClient={
+    models:async()=>({}),getConversationStreamStatus:async()=>({status:"COMPLETE"}),
+    startCompletionStream:async input=>{native=input as NativeCompletionInput;native.onRequestStart();},
+    rename:async(_id,next)=>{renames++;if(mode === "rename-failure")throw Error("private");title=next;},
+    delete:async()=>{deletes++;return mode === "delete-rejected" ? {success:false} : {};},
+    get:async()=>({title,current_node:"reply",mapping:{
+      user:{message:{id:"user",author:{role:"user"},content:{parts:["Request"]}}},
+      reply:{parent:"user",message:{id:"reply",author:{role:"assistant"},end_turn:true,content:{parts:["Plan"]}}},
+    }}),
+  };
+  const adapter=new AppChatBackgroundAdapter(client,()=>true,()=>"user");
+  await adapter.send({text:"Request",model:{key:"m",slug:"planner",mode:"thinking",title:"Planner",effort:"standard",effortLabel:"Medium"}});
+  native.onUpdate({conversationId:"owned",type:"message",message:{id:"reply"}});native.onComplete({reason:"done"});
+  await expect(adapter.read("user",30000)).resolves.toMatchObject({state:"complete"});
+  expect(renames).toBe(mode === "prefixed" ? 0 : 1);
+  if(mode === "rename-failure")expect(adapter.diagnostics()).toEqual({titleError:"TITLE_UPDATE_FAILED"});
+  if(mode === "manual-rename"){
+    title="User's own title";
+    await expect(adapter.finish("delete")).rejects.toMatchObject({code:"USER_INTERVENED"});
+    expect(deletes).toBe(0);
+  } else if(mode === "delete-rejected") {
+    await expect(adapter.finish("delete")).rejects.toMatchObject({code:"CHAT_REQUEST_FAILED"});
+  } else await adapter.finish("retain");
+  adapter.dispose();
 });
 
 it("waits inside a bounded read window instead of making the caller busy-poll", async () => {

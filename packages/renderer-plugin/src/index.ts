@@ -19,8 +19,8 @@ export function start(api: LoaderApi): void {
   stop();
   const instance = epoch;
   let configuration: ChatConfiguration;
-  try { configuration = new ChatConfiguration(api.storage.get(DEFAULTS_KEY) ?? undefined); }
-  catch { configuration = new ChatConfiguration(); backgroundError = "SAVED_CONFIGURATION_INVALID"; }
+  try { configuration = new ChatConfiguration(api.storage.get(DEFAULTS_KEY) ?? undefined, api.storage); }
+  catch { configuration = new ChatConfiguration(undefined, api.storage); backgroundError = "SAVED_CONFIGURATION_INVALID"; }
   const refresh = async (): Promise<void> => {
     const sequence = ++refreshSequence;
     let timer: ReturnType<typeof setTimeout> | undefined;
