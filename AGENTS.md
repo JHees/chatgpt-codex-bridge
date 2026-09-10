@@ -16,16 +16,16 @@ This repository owns one Script Loader package containing a renderer plugin and 
 - Use the project-local `.conda` environment and Node 22 or newer.
 - For a behavior change with a meaningful reproducible seam, add or update a regression test and verify the failure and fix. Documentation-only edits need structural and consistency checks; explain any material runtime verification gap.
 - Keep production code within the renderer plugin unless the public skill workflow itself changes.
-- Do not change versions, create tags, publish, install, or deploy unless explicitly requested.
+- Follow the candidate hot-load workflow below after functional changes. Keep release versions and Git history unchanged until the user accepts the candidate.
 
 ## 调试与发布流程
 
-本项目采用“候选热更新 → 用户验收 → 新版本发布 → 自动更新替换”的流程。
+本项目默认采用“候选热更新 → 用户验收 → 新版本发布 → 自动更新替换”的流程。用户已持续授权：每轮功能修改或修复完成后自动部署候选并热加载，无需再次询问。仅文档修改或用户本轮明确要求不部署时跳过。
 
-1. 用户要求调试热更新时，先保留工作树改动及可恢复的已安装包，完成 Bridge 检查、测试和单包构建。通过 Loader 的通用插件安装与重载接口更新 renderer 和随包 skill，不单独复制 skill。
-2. 核对实际运行包、插件 lifecycle、设置页和输入区入口，明确报告已部署内容及尚未验证的功能。源码或隔离测试通过不等于运行副本已更新。
+1. 每轮功能修改后，先保留工作树改动及可恢复的已安装包，完成 Bridge 检查、测试和单包构建。通过 Loader 的通用插件安装与重载接口更新 renderer 和随包 skill，不单独复制 skill。
+2. 核对实际运行包、插件 lifecycle、设置页和输入区入口，明确报告已部署内容及用户验收项。完成标准是候选实际加载且重载后检查通过；源码或隔离测试通过不等于完成部署。活动协作、检查或安装失败时报告具体阻碍，不擅自结束协作；不能仅因用户没有再次说“热加载”就停在未部署状态。
 3. 候选调试期间保持正式版本号不变，不提前提交、创建 tag、push 或发布。将候选与已发布包区分记录，不能只看同一版本号。
-4. 等用户明确确认检查无误后，再按其发布要求使用新的版本号，完成版本一致性、测试、提交、tag、GitHub push 与 Release 包验证；用户随后通过 Loader 自动更新替换候选包。用户尚未确认时停在验收阶段。
+4. 用户明确确认当前候选验收通过后，使用新的正式版本号，完成版本一致性、测试、提交、tag、GitHub push 与 Release 更新包验证；用户随后通过 Loader 自动更新替换候选包。用户尚未确认时停在验收阶段。
 5. Loader 与 Bridge 独立维护和发布。若候选依赖当前 Loader 缺失的能力，说明具体缺口并取得对应更新授权，不擅自覆盖 Loader 或其他插件。真实 Pro 生成测试仍需单独明确授权。
 
 ### 本地候选热更新入口

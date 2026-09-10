@@ -2,6 +2,52 @@ import { expect, it, vi } from "vitest";
 import { AppChatBackgroundAdapter, type NativeCompletionInput } from "../packages/renderer-plugin/src/background-adapter.js";
 import type { AppChatClient } from "../packages/renderer-plugin/src/app-chat-runtime.js";
 
+it.each(["success", "unconfirmed", "rejected", "unsupported", "generating", "intervened"])("archives only an owned completed Chat with native confirmation: %s", async mode => {
+  let native!: NativeCompletionInput, archived = false, calls = 0, deletes = 0;
+  const client: AppChatClient = {
+    models: async () => ({}), startCompletionStream: async input => { native = input as NativeCompletionInput; native.onRequestStart(); },
+    getConversationStreamStatus: async () => ({status:"COMPLETE"}),
+    get: async () => ({is_archived:archived,current_node:"reply",mapping:{
+      user:{message:{id:"user",author:{role:"user"},content:{parts:["Request"]}}},
+      reply:{parent:"user",message:{id:"reply",author:{role:"assistant"},end_turn:true,content:{parts:["Response"]}}},
+      ...(mode === "intervened" ? {other:{message:{id:"other",author:{role:"user"},content:{parts:["Manual"]}}}} : {}),
+    }}),
+    delete: async () => { deletes++; },
+    ...(mode === "unsupported" ? {} : {setArchived:async (id:string, value:boolean) => {
+      expect(id).toBe("owned"); expect(value).toBe(true); calls++;
+      if (mode === "rejected") return {success:false};
+      archived = mode !== "unconfirmed"; return {success:true};
+    }}),
+  };
+  const adapter = new AppChatBackgroundAdapter(client, () => true, () => "user");
+  await adapter.send({text:"Request",model:{key:"m",slug:"planner",mode:"thinking",title:"Planner",effort:"standard",effortLabel:"Medium"}});
+  native.onUpdate({conversationId:"owned",type:"message",message:{id:"reply"}});
+  if (mode !== "generating") native.onComplete({reason:"done"});
+  if (mode === "success") await expect(adapter.finish("archive")).resolves.toBeUndefined();
+  else {
+    const codes = {unconfirmed:"ARCHIVE_UNCONFIRMED",rejected:"CHAT_REQUEST_FAILED",unsupported:"ARCHIVE_UNSUPPORTED",generating:"CLEANUP_UNSAFE",intervened:"USER_INTERVENED"};
+    await expect(adapter.finish("archive")).rejects.toMatchObject({code:codes[mode as keyof typeof codes]});
+    if (mode === "unconfirmed") { archived = true; await adapter.finish("archive"); expect(calls).toBe(1); }
+    else await adapter.finish("retain");
+  }
+  expect(deletes).toBe(0);
+  expect(calls).toBe(["success","unconfirmed","rejected"].includes(mode) ? 1 : 0);
+});
+
+it("interrupts only the local waiter and safely retains an ongoing native generation", async () => {
+  let native!: NativeCompletionInput;
+  const client: AppChatClient = {models:async()=>({}),get:async()=>({}),getConversationStreamStatus:async()=>({status:"IN_PROGRESS"}),delete:async()=>{throw Error("must not delete");},startCompletionStream:async input=>{native=input as NativeCompletionInput;native.onRequestStart();}};
+  const adapter = new AppChatBackgroundAdapter(client, () => true, () => "user");
+  await adapter.send({text:"Request",model:{key:"m",slug:"planner",mode:"thinking",title:"Planner",effort:"standard",effortLabel:"Medium"}});
+  const abort = new AbortController();
+  const reading = adapter.read("user",90_000,abort.signal);
+  abort.abort();
+  await expect(reading).rejects.toMatchObject({code:"SESSION_ENDING"});
+  await expect(adapter.finish("delete")).rejects.toMatchObject({code:"CLEANUP_UNSAFE"});
+  await adapter.finish("retain");
+  native.onComplete({reason:"done"});
+});
+
 it("uses the explicitly selected native model without a fabricated Pro effort, and reads the correlated final reply", async () => {
   let invocation: NativeCompletionInput | undefined;
   let deleted = false;
@@ -56,6 +102,7 @@ it("bounds deletion and keeps one in-flight delete across explicit retries", asy
     await vi.advanceTimersByTimeAsync(10_000);
     expect(error).toMatchObject({ code: "CLEANUP_PENDING" });
     await finish;
+    await expect(adapter.finish("retain")).rejects.toMatchObject({ code: "CLEANUP_PENDING" });
     const retry = adapter.finish("delete"); await vi.advanceTimersByTimeAsync(0);
     expect(deletes).toBe(1); completeDelete(); await retry;
     expect(vi.getTimerCount()).toBe(0);

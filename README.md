@@ -4,9 +4,7 @@
 
 Bridge connects a user-selected **App Chat planner** to the **current Codex executor**. It keeps both model choices independent: Chat can plan and revise; Codex uses its existing tools and permissions to execute, verify and deliver.
 
-**Bridge 0.1.1** adds background Chat, task controls, automatically saved settings and tolerant structured replies. See [release notes](docs/RELEASE-0.1.1.md) and [validation evidence](docs/VALIDATION.md) for the tested scope and remaining acceptance limits. Building this repository does not update an installed package.
-
-**Bridge 0.1.2** additionally remembers task preferences, shortens composer instructions, formats readable Chat briefs, prefixes owned Chat titles with `[bridge] `, and automatically applies cleanup after verified completion. See [0.1.2 notes](docs/RELEASE-0.1.2.md) and [validation limits](docs/UX-CANDIDATE.md); live acceptance of these new behaviors is pending and the earlier 0.1.1 results do not replace it.
+**Bridge 0.1.3** adds collapsible instructions in drafts and sent messages, two-way synchronization between Remove and the collaboration switch, compact settings menus, and explicit delete/archive/retain handling without a busy local read blocking termination. See [release notes](docs/RELEASE-0.1.3.md) and [validation scope](docs/UX-ITERATION.md). Building this repository does not update an installed package. Historical changes remain documented in the [0.1.2 notes](docs/RELEASE-0.1.2.md) and [0.1.1 notes](docs/RELEASE-0.1.1.md).
 
 ## Runtime
 
@@ -20,7 +18,7 @@ Three allowlisted operations cover the workflow:
 
 - `status`: read native submission binding, frozen preparation, model catalog and current state.
 - `exchange`: send one structured business turn or continue reading that exact turn.
-- `finish`: end the owned session and explicitly delete or retain its dedicated Chat.
+- `finish`: end the owned session and explicitly delete, archive or retain its dedicated Chat. User-requested termination is separate from verified completion; a busy local read is interrupted without cancelling native generation.
 
 The App adapter discovers the current local resource graph and App-owned dependency scope. It sends and reads through the native Chat client, correlates messages and parent nodes, and checks ownership before cleanup. It does not navigate, focus a Chat textbox or request trusted Enter. It does not create a daemon, MCP server, webpage ChatGPT session, database writer, project reader or listening port.
 
@@ -38,7 +36,7 @@ Read the [Chinese usage guide](docs/USAGE.md), [bundled protocol reference](skil
 
 One ZIP contains the renderer and `skills/bridge-chat`, including the helper. Loader manages the skill with installation, updates and rollback. There is no second installation step.
 
-Requires **native Windows Loader 0.5.11 or later** with schema-v2 bundled skills, settings/storage with page navigation, composer accessories, editable visible context and accepted native submission receipts. Those interfaces were live-tested in the preceding locally updated 0.5.10 candidate and are included in Loader 0.5.11. Public 0.5.10 is not a compatible baseline. Check Bridge diagnostics before use; this plugin does not update Loader.
+Use **native Windows Loader 0.5.12 or later** for the complete 0.1.3 experience, including folded drafts and two-way removal notifications. Loader 0.5.11 provides the base schema-v2 skill, settings/storage and native submission interfaces but lacks those UI extensions; older hosts fall back to visible instructions without reverse Remove synchronization. Check Bridge diagnostics before use; this plugin does not update Loader.
 
 The update source remains [JHees/chatgpt-codex-bridge](https://github.com/JHees/chatgpt-codex-bridge). Stable releases use `bridge-{version}.zip` and its `.sha256`. Loader automatic replacement is opt-in; new permissions/local edits require confirmation. Main-branch CI artifacts are test packages, not Loader update releases. See [RELEASING.md](docs/RELEASING.md).
 

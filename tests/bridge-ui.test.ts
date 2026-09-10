@@ -4,10 +4,102 @@ import { BridgeUi } from "../packages/renderer-plugin/src/bridge-ui.js";
 import { ChatConfiguration } from "../packages/renderer-plugin/src/chat-configuration.js";
 import { CooperationController } from "../packages/renderer-plugin/src/cooperation-controller.js";
 import type { LoaderApi } from "../packages/renderer-plugin/src/loader-interface.js";
+import type { BackgroundChatPort } from "../packages/renderer-plugin/src/background-session.js";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => { for (const stop of cleanup.splice(0)) stop(); vi.useRealTimers(); });
-function fixture(enabled = false, navigation = true) {
+const sentContext = "[Loader context: dev.codex-chat-bridge / submission-test]\nUse the bundled bridge-chat skill.\n[/Loader context]";
+function sentMessage(document: Document, text = sentContext): HTMLElement {
+  const bubble = document.createElement("div"); bubble.setAttribute("data-user-message-bubble", "true");
+  const markdown = document.createElement("div"); markdown.setAttribute("data-markdown-text-tone", "user-message");
+  const body = document.createElement("p"); body.textContent = "My original request";
+  const context = document.createElement("p"); context.textContent = text;
+  markdown.append(body, context); bubble.append(markdown); document.body.append(bubble);
+  return bubble;
+}
+
+it("folds sent Bridge instructions without replacing native text and restores them on stop", async () => {
+  const f = fixture();
+  const bubble = sentMessage(f.document), paragraphs = bubble.querySelectorAll("p");
+  const context = paragraphs[1]!, original = context.innerHTML, originalNode = context.firstChild;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const toggle = bubble.querySelector<HTMLButtonElement>("[data-bridge-sent-toggle]")!;
+  expect(toggle).not.toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(f.window.getComputedStyle(context as never).display).toBe("none");
+  expect(paragraphs[0]!.textContent).toBe("My original request");
+  toggle.click();
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(f.window.getComputedStyle(context as never).display).not.toBe("none");
+  toggle.click();
+  expect(context.innerHTML).toBe(original); expect(context.firstChild).toBe(originalNode);
+  f.ui.stop();
+  expect(bubble.querySelector("button")).toBeNull();
+  expect(context.hasAttribute("data-bridge-sent-collapsed")).toBe(false);
+  expect(context.innerHTML).toBe(original);
+});
+
+it("folds existing history on mount and handles message rerenders without duplicate controls", async () => {
+  const f = fixture(); f.ui.stop();
+  const bubble = sentMessage(f.document);
+  const ui = new BridgeUi(f.document, f.api, f.controller, f.refreshModels); ui.start(); cleanup.push(() => ui.stop());
+  expect(bubble.querySelectorAll("[data-bridge-sent-toggle]")).toHaveLength(1);
+  const context = bubble.querySelectorAll("p")[1]!;
+  context.textContent = "Edited normal message";
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(bubble.querySelector("[data-bridge-sent-toggle]")).toBeNull();
+  expect(context.hasAttribute("data-bridge-sent-collapsed")).toBe(false);
+  context.textContent = sentContext;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(bubble.querySelectorAll("[data-bridge-sent-toggle]")).toHaveLength(1);
+  const replacement = bubble.cloneNode(true) as HTMLElement;
+  // The native rerender recreates its own paragraph, not plugin controls.
+  replacement.querySelector("button")?.remove();
+  replacement.querySelector("[data-bridge-sent-collapsed]")?.removeAttribute("data-bridge-sent-collapsed");
+  bubble.replaceWith(replacement);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(replacement.querySelectorAll("[data-bridge-sent-toggle]")).toHaveLength(1);
+  expect(bubble.querySelector("button")).toBeNull();
+});
+
+it("leaves drafts, assistant examples, other plugins and mixed or incomplete paragraphs visible", async () => {
+  const f = fixture();
+  sentMessage(f.document, "My request\n" + sentContext);
+  sentMessage(f.document, sentContext.replace("[/Loader context]", ""));
+  sentMessage(f.document, sentContext.replace("dev.codex-chat-bridge", "another-plugin"));
+  const draft = sentMessage(f.document); draft.setAttribute("contenteditable", "true");
+  const assistant = sentMessage(f.document); assistant.removeAttribute("data-user-message-bubble");
+  assistant.firstElementChild!.setAttribute("data-markdown-text-tone", "assistant-message");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(f.document.querySelector("[data-bridge-sent-toggle]")).toBeNull();
+  expect(f.preparations).toHaveLength(0);
+});
+
+it.each([
+  ["zh", "Chat Planner · pro · Extended。配置 snapshot-test；其余参数由 status 读取。", "Chat 协作 · Planner · Extended"],
+  ["en", "Chat Reasoner · thinking · High. Configuration snapshot-test; read remaining parameters with status.", "Chat collaboration · Reasoner · High"],
+  ["zh", "使用随包 bridge-chat skill 协作：Chat 规划，Codex 执行并回报证据；沿用现有权限，接入失败时暂停。Chat GPT-5.6 Sol · thinking · 中。配置 snapshot-test；其余参数由 status 读取。", "Chat 协作 · GPT-5.6 Sol · 中"],
+  ["en", "Use the bundled bridge-chat skill: Chat plans; Codex executes and reports evidence under existing permissions. Pause if connection fails. Chat Reasoner · thinking · High. Configuration snapshot-test; read remaining parameters with status.", "Chat collaboration · Reasoner · High"],
+])("restored %s composer instructions keep the original Bridge summary", async (language, text, expected) => {
+  const f = fixture(); f.ui.stop(); f.document.documentElement.lang = language;
+  const editor = f.document.createElement("div"); editor.setAttribute("data-codex-composer", "true");
+  const fold = f.document.createElement("div"); fold.dataset.loaderContextFold = "true";
+  const bar = f.document.createElement("div"); bar.contentEditable = "false";
+  const title = f.document.createElement("span"); title.textContent = "插件说明（已有草稿）"; title.title = title.textContent;
+  const body = f.document.createElement("p"); body.textContent = `[Loader context: dev.codex-chat-bridge / submission-test]\n${text}\n[/Loader context]`;
+  const originalBody = body.textContent;
+  bar.append(title); fold.append(bar, body); editor.append(fold); f.document.body.append(editor);
+  const unrelated = fold.cloneNode(true) as HTMLElement;
+  unrelated.querySelector("p")!.textContent = body.textContent.replace("dev.codex-chat-bridge", "another.plugin"); editor.append(unrelated);
+  const ui = new BridgeUi(f.document, f.api, f.controller, f.refreshModels); ui.start(); cleanup.push(() => ui.stop());
+  expect(title.textContent).toBe(expected); expect(title.title).toBe(expected);
+  expect(body.textContent).toBe(originalBody);
+  expect(unrelated.querySelector("span")!.textContent).toBe("插件说明（已有草稿）");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(title.textContent).toBe(expected); expect(f.preparations).toHaveLength(0);
+  ui.stop(); expect(title.textContent).toBe("插件说明（已有草稿）");
+});
+function fixture(enabled = false, navigation = true, port?: BackgroundChatPort) {
   const window = new Window({ url: "app://-/index.html" });
   const document = window.document as unknown as Document;
   document.documentElement.lang = "en";
@@ -24,10 +116,12 @@ function fixture(enabled = false, navigation = true) {
   let edited = false, accepted = false;
   const receipt = (bindingId: string) => accepted ? { state: "accepted", bindingId, hostId: task.hostId, taskId: task.taskId, turnId: "native-turn" } : { state: "prepared", bindingId };
   let mountedTask = task.taskId, clears = 0, settingsOpened = 0;
+  let onChange: ((event: { target: "context"; action: "removed" | "edited" | "expanded" | "collapsed"; revision: string; identity: typeof task }) => void) | undefined;
   const api: LoaderApi = {
     version: "test", storage: { get: () => null, set: (_key, value) => { writes.push(value); } },
     settings: { registerPage: page => { page.render(settings); return { ...(navigation ? { open: async () => { settingsOpened++; } } : {}), unregister() { settings.replaceChildren(); } }; } },
     composer: { registerAccessory: spec => {
+      onChange = (spec as typeof spec & { onChange?: typeof onChange }).onChange;
       spec.render(composer, task);
       return { getStatus: () => ({ available: true, hostId: task.hostId, taskId: mountedTask, context: { state: edited ? "missing-or-edited" : "prepared" } }),
         getSubmission: receipt,
@@ -36,13 +130,61 @@ function fixture(enabled = false, navigation = true) {
       };
     } },
   };
-  const controller = new CooperationController(configuration, receipt, () => { throw Error("No generation in UI tests"); });
+  const controller = new CooperationController(configuration, receipt, () => { if (port) return port; throw Error("No generation in UI tests"); });
   const refreshModels = vi.fn(async () => {});
   const ui = new BridgeUi(document, api, controller, refreshModels); ui.start();
   cleanup.push(() => { ui.stop(); controller.stop(); window.happyDOM.abort(); });
   const fire = (element: Element, type: string): void => { const event = document.createEvent("Event"); event.initEvent(type, false, true); element.dispatchEvent(event); };
-  return { window, document, settings, composer, ui, api, refreshModels, configuration, writes, preparations, fire, accept: () => { accepted = true; }, edit: () => { edited = true; }, navigate: () => { mountedTask = "task-b"; }, clears: () => clears, settingsOpened: () => settingsOpened };
+  return { window, document, settings, composer, ui, api, controller, refreshModels, configuration, writes, preparations, fire,
+    managedChange: (action: "removed" | "edited" | "expanded" | "collapsed", identity = task) => onChange?.({ target: "context", action, revision: "binding-1", identity }),
+    accept: () => { accepted = true; }, edit: () => { edited = true; }, navigate: () => { mountedTask = "task-b"; }, clears: () => clears, settingsOpened: () => settingsOpened };
 }
+
+it("Loader Remove turns collaboration off immediately without an API echo or automatic reinsertion", async () => {
+  vi.useFakeTimers(); const f = fixture(true);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.preparations).toHaveLength(1);
+  f.managedChange("expanded"); f.managedChange("collapsed"); f.managedChange("edited");
+  expect(f.configuration.task({ hostId: "local", taskId: "task-a" }).enabled).toBe(true);
+  f.managedChange("removed");
+  expect(f.configuration.task({ hostId: "local", taskId: "task-a" }).enabled).toBe(false);
+  expect(f.composer.textContent).toContain("off"); expect(f.clears()).toBe(0);
+  await vi.advanceTimersByTimeAsync(3000); expect(f.preparations).toHaveLength(1);
+  f.composer.querySelector<HTMLButtonElement>("button")!.click(); await vi.advanceTimersByTimeAsync(1);
+  const enabled = f.document.querySelector<HTMLInputElement>('.bridge-popover input[role="switch"]')!;
+  expect(enabled.checked).toBe(false);
+  enabled.checked = true; f.fire(enabled, "change"); expect(f.preparations).toHaveLength(2);
+  enabled.checked = false; f.fire(enabled, "change"); expect(f.clears()).toBe(2);
+});
+
+it("a stale Loader notification cannot disable the mounted task", async () => {
+  vi.useFakeTimers(); const f = fixture(true); await vi.advanceTimersByTimeAsync(1);
+  f.managedChange("removed", { hostId: "local", taskId: "task-b" });
+  expect(f.configuration.task({ hostId: "local", taskId: "task-a" }).enabled).toBe(true);
+});
+
+it("the real task-panel end button can finish a busy exchange and clear only its owned context", async () => {
+  vi.useFakeTimers();
+  let start!: () => void, finishes = 0;
+  const started = new Promise<void>(resolve => { start = resolve; });
+  const port: BackgroundChatPort = {
+    check:async()=>{},send:async()=>"message",finish:async()=>{finishes++;},
+    read:async(_id,_wait,signal)=>{start();await new Promise<void>(resolve=>signal!.addEventListener("abort",()=>resolve(),{once:true}));return{state:"waiting"};},
+  };
+  const f = fixture(true,true,port); await vi.advanceTimersByTimeAsync(1000); f.accept();
+  const task = {hostId:"local",taskId:"task-a"};
+  const config=f.controller.status({task,bindingId:"binding-1"}).prepared!;
+  const pending=f.controller.exchange({task,bindingId:"binding-1",snapshotId:config.id,request:{protocol:"codex-chat-bridge/v1",sessionId:"session",turnId:"turn",kind:"request",objective:"Test stop",state:{phase:"plan",summary:"Waiting",completed:[],blockers:[]},message:"Plan",actionResults:[]}}).catch(error=>error);
+  await started;
+  f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  const end=[...f.document.querySelectorAll<HTMLButtonElement>(".bridge-actions button")].find(button=>button.textContent==="End and retain")!;
+  expect(end).toBeDefined(); end.click(); await vi.advanceTimersByTimeAsync(0);
+  expect(await pending).toMatchObject({code:"SESSION_ENDING"});
+  expect(finishes).toBe(1);
+  expect(f.controller.status({task}).active).toBeNull();
+  expect(f.clears()).toBe(1);
+  expect(f.document.querySelector(".bridge-popover")).toBeNull();
+});
 
 it("registers one settings page and an off task control without sending or preparing a context", async () => {
   const f = fixture(); await Promise.resolve();
@@ -51,6 +193,24 @@ it("registers one settings page and an off task control without sending or prepa
   expect(f.composer.textContent).toContain("off");
   expect(f.preparations).toHaveLength(0);
   expect(f.writes).toHaveLength(0);
+});
+
+it("uses whole-trigger menus for read window and cleanup, saving archive without a native select", async () => {
+  const f = fixture();
+  expect(f.settings.querySelector("select")).toBeNull();
+  const trigger = f.settings.querySelector<HTMLButtonElement>('[aria-label="Conversation policy after verified completion"]')!;
+  trigger.click(); await Promise.resolve(); await Promise.resolve();
+  const archive = [...f.document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(row=>row.textContent==="Archive")!;
+  expect(archive).toBeDefined(); archive.click(); await Promise.resolve(); await Promise.resolve();
+  expect(f.configuration.defaults().cleanup).toBe("archive");
+  expect(trigger.textContent).toBe("Archive");
+  expect(f.writes).toHaveLength(1);
+  const window = f.settings.querySelector<HTMLButtonElement>('[aria-label="Read window"]')!;
+  window.click(); await Promise.resolve(); await Promise.resolve();
+  const item = [...f.document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(row=>row.textContent==="30 s")!;
+  item.click(); await Promise.resolve(); await Promise.resolve();
+  expect(f.configuration.defaults().readWindowSeconds).toBe(30);
+  expect(f.document.activeElement).toBe(window);
 });
 
 it("shows accepted instructions as waiting for Codex, not an active Chat session", async () => {

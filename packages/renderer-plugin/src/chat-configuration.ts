@@ -8,7 +8,7 @@ export interface ChatSettings {
   maxRounds: number;
   readWindowSeconds: 30 | 60 | 90;
   totalWaitMinutes: number;
-  cleanup: "delete" | "retain";
+  cleanup: CleanupPolicy;
 }
 export interface ChatModel {
   key: string;
@@ -30,6 +30,8 @@ export type PreparedConfiguration = Omit<ConfigurationSnapshot, "task">;
 export interface TaskPreferenceStore { get(key: string): unknown; set(key: string, value: unknown): unknown }
 const taskPrefix = "task-preferences-v1:";
 
+export type CleanupPolicy = "delete" | "archive" | "retain";
+export const isCleanupPolicy = (value: unknown): value is CleanupPolicy => value === "delete" || value === "archive" || value === "retain";
 const initial: ChatSettings = { enabled: false, modelKey: null, maxRounds: 3, readWindowSeconds: 90, totalWaitMinutes: 15, cleanup: "delete" };
 
 function record(value: unknown, code = "INVALID_CONFIGURATION"): Record<string, unknown> {
@@ -52,8 +54,8 @@ function settings(value: unknown): ChatSettings {
     || !Number.isInteger(input.maxRounds) || Number(input.maxRounds) < 1 || Number(input.maxRounds) > 8
     || ![30, 60, 90].includes(Number(input.readWindowSeconds)) || typeof input.readWindowSeconds !== "number"
     || !Number.isInteger(input.totalWaitMinutes) || Number(input.totalWaitMinutes) < 1 || Number(input.totalWaitMinutes) > 60
-    || !(input.cleanup === "delete" || input.cleanup === "retain")) throw new BridgeError("INVALID_CONFIGURATION", "Configuration values are invalid or unsupported.");
-  return { enabled: input.enabled, modelKey: input.modelKey, maxRounds: Number(input.maxRounds), readWindowSeconds: input.readWindowSeconds as 30 | 60 | 90, totalWaitMinutes: Number(input.totalWaitMinutes), cleanup: input.cleanup as "delete" | "retain" };
+    || !isCleanupPolicy(input.cleanup)) throw new BridgeError("INVALID_CONFIGURATION", "Configuration values are invalid or unsupported.");
+  return { enabled: input.enabled, modelKey: input.modelKey, maxRounds: Number(input.maxRounds), readWindowSeconds: input.readWindowSeconds as 30 | 60 | 90, totalWaitMinutes: Number(input.totalWaitMinutes), cleanup: input.cleanup };
 }
 
 /** Durable preferences only. Session state, prompts and task history never enter storage. */

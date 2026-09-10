@@ -27,6 +27,19 @@ function fixture() {
   };
 }
 
+it("allows explicit user termination without claiming verified completion, but keeps automatic archive gated", async () => {
+  const f = fixture(); f.accept();
+  await f.controller.exchange(f.payload);
+  const end = {task:f.task,sessionId:"session-a",policy:"archive"};
+  await expect(f.controller.finish(end)).rejects.toMatchObject({code:"COMPLETION_UNVERIFIED"});
+  let archived = 0; f.port.finish = async policy => { if (policy === "archive") archived++; };
+  await expect(f.controller.finish({...end,reason:"user-request"})).resolves.toMatchObject({state:"ended",policy:"archive"});
+  expect(archived).toBe(1);
+  expect(f.controller.status({task:f.task}).active).toBeNull();
+  await expect(f.controller.finish({...end,reason:"user-request"})).resolves.toMatchObject({state:"ended"});
+  expect(archived).toBe(1);
+});
+
 it("recovers a lost reply through an owned read-only status query and marks feedback-accounted turns", async () => {
   const f = fixture(); f.accept();
   const read = { sessionId: "session-a", turnId: "turn-a" };

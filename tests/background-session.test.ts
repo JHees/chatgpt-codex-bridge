@@ -27,6 +27,26 @@ function fixture() {
   };
 }
 
+it("ends a pending read without CALL_BUSY, suppresses late actions, and coalesces repeated cleanup", async () => {
+  const f = fixture();
+  let reading!: () => void;
+  const started = new Promise<void>(resolve => { reading = resolve; });
+  f.port.read = async (_id, _window, signal) => {
+    reading();
+    await new Promise<void>(resolve => signal!.addEventListener("abort", () => resolve(), { once: true }));
+    return { state: "complete", text: "Bridge status: complete\nLate response" };
+  };
+  let finishes = 0;
+  f.port.finish = async () => { finishes++; };
+  const pending = f.session.exchange(f.request).catch(error => error);
+  await started;
+  await Promise.all([f.session.finish("retain"), f.session.finish("retain")]);
+  expect(await pending).toMatchObject({ code: "SESSION_ENDING" });
+  expect(finishes).toBe(1);
+  expect(f.sent).toHaveLength(1);
+  await expect(f.session.exchange(f.request)).rejects.toMatchObject({ code: "SESSION_LOST" });
+});
+
 it("sends once across short read windows and requires explicit continuation after the total deadline", async () => {
   const f = fixture();
   expect((await f.session.exchange(f.request)).state).toBe("waiting");

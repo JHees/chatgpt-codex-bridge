@@ -1,4 +1,4 @@
-import type { ConfigurationSnapshot } from "./chat-configuration.js";
+import { isCleanupPolicy, type CleanupPolicy, type ConfigurationSnapshot } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
 import { formatRepairPrompt, formatRequestPrompt, parseBridgeRequest, parseBridgeResponse, ProtocolError, type BridgeRequest, type BridgeResponse } from "./protocol.js";
 
@@ -6,8 +6,8 @@ import { formatRepairPrompt, formatRequestPrompt, parseBridgeRequest, parseBridg
 export interface BackgroundChatPort {
   check(): Promise<void>;
   send(input: { text: string; model: ConfigurationSnapshot["model"] }): Promise<string>;
-  read(messageId: string, waitMs: number): Promise<{ state: "waiting" } | { state: "complete"; text: string }>;
-  finish(policy: "delete" | "retain"): Promise<void>;
+  read(messageId: string, waitMs: number, signal?: AbortSignal): Promise<{ state: "waiting" } | { state: "complete"; text: string }>;
+  finish(policy: CleanupPolicy): Promise<void>;
   dispose?(): void;
   diagnostics?(): { titleError: string | null };
 }
@@ -43,12 +43,17 @@ export class BackgroundSession {
   private cleanupFailed = false;
   private cleanupReason: string | null = null;
   private completedReport = false;
+  private endRequested = false;
+  private idle: Promise<void> = Promise.resolve();
+  private readAbort: AbortController | undefined;
+  private finishing: { policy: CleanupPolicy; promise: Promise<void> } | undefined;
 
   constructor(readonly id: string, readonly config: Readonly<ConfigurationSnapshot>, private readonly chat: BackgroundChatPort, private readonly now: () => number = () => performance.now()) {}
 
   async exchange(input: unknown, replyToTurnId?: string): Promise<BackgroundResult> {
-    if (this.busy) throw new BridgeError("CALL_BUSY", "Another call is still running.");
     if (this.stopped) throw new BridgeError("SESSION_LOST", "This session has ended.");
+    if (this.endRequested) throw new BridgeError("SESSION_ENDING", "Ending this session; no new actions or messages are allowed.");
+    if (this.busy) throw new BridgeError("CALL_BUSY", "Another call is still running.");
     if (this.terminal) throw this.terminal;
     const request = parseBridgeRequest(input);
     if (request.sessionId !== this.id) throw new BridgeError("SESSION_MISMATCH", "The request does not belong to this session.");
@@ -65,8 +70,16 @@ export class BackgroundSession {
       this.checkResults(request, replyToTurnId);
     }
     this.busy = true;
+    let release!: () => void;
+    this.idle = new Promise<void>(resolve => { release = resolve; });
+    this.readAbort = new AbortController();
+    const assertRunning = (): void => {
+      if (this.stopped) throw new BridgeError("SESSION_LOST", "The plugin stopped during the call.");
+      if (this.endRequested) throw new BridgeError("SESSION_ENDING", "The user requested termination; no late actions are delivered.");
+    };
     try {
       await this.chat.check();
+      assertRunning();
       if (!turn) {
         const previous = this.last ? this.turns.get(this.last) : undefined;
         if (previous) previous.accounted = true;
@@ -77,18 +90,21 @@ export class BackgroundSession {
         // Register before sending. An uncertain send must never be attempted again.
         this.used++;
         turn.messageId = await this.send(formatRequestPrompt(request));
+        assertRunning();
       }
       if (this.now() >= turn.deadline) { turn.paused = true; return this.waitState(request.turnId, turn); }
       if (turn.repair === "required") {
         turn.repair = "sent";
         delete turn.source;
         turn.messageId = await this.send(formatRepairPrompt());
+        assertRunning();
       }
       const remaining = turn.deadline - this.now();
       if (remaining <= 0) { turn.paused = true; return this.waitState(request.turnId, turn); }
       const result = turn.source === undefined
-        ? await this.chat.read(turn.messageId!, Math.min(this.config.settings.readWindowSeconds * 1000, remaining))
+        ? await this.chat.read(turn.messageId!, Math.min(this.config.settings.readWindowSeconds * 1000, remaining), this.readAbort.signal)
         : { state: "complete" as const, text: turn.source };
+      assertRunning();
       if (result.state === "complete") turn.source = result.text;
       if (this.stopped) throw new BridgeError("SESSION_LOST", "The plugin stopped while reading.");
       if (!this.enabled) throw new BridgeError("COLLABORATION_DISABLED", "Collaboration was disabled while waiting; no actions were delivered.");
@@ -115,15 +131,17 @@ export class BackgroundSession {
         && request.actionResults.every(result => result.outcome === "succeeded");
       return { state: "response", response: structuredClone(turn.response) };
     } catch (error) {
+      if (this.endRequested) throw new BridgeError("SESSION_ENDING", "The session was explicitly ended; do not retry the exchange.");
       this.terminal = error instanceof BridgeError ? error : new BridgeError("BACKGROUND_FAILED", "The background adapter failed. End this session before trying again.");
       throw this.terminal;
-    } finally { this.busy = false; }
+    } finally { this.busy = false; this.readAbort = undefined; release(); }
   }
 
   setEnabled(enabled: boolean): void { this.enabled = enabled; }
   /** Read a validated cached reply only. Never send, repair, grant consent or fetch Chat. */
   readTurn(turnId: string) {
     if (this.stopped) throw new BridgeError("SESSION_LOST", "This session has ended.");
+    if (this.endRequested) return { state: "ending" as const, turnId };
     const turn = this.turns.get(turnId);
     if (!turn) return { state: "not-found" as const, turnId };
     if (turn.accounted) return { state: "accounted" as const, turnId };
@@ -148,7 +166,7 @@ export class BackgroundSession {
     const response = this.last ? this.turns.get(this.last)?.response : undefined;
     const deadlineReached = turn && (turn.paused || this.now() >= turn.deadline);
     return {
-      state: this.cleanupFailed ? "cleanup-failed" : this.terminal ? "failed" : this.awaitingUser ? "needs-user" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
+      state: this.cleanupFailed ? "cleanup-failed" : this.endRequested ? "ending" : this.terminal ? "failed" : this.awaitingUser ? "needs-user" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
       usedRounds: this.used, maxRounds: this.config.settings.maxRounds, busy: this.busy,
       errorCode: this.cleanupFailed ? "CLEANUP_FAILED" : this.terminal?.code ?? null,
       cleanupReason: this.cleanupReason,
@@ -157,7 +175,7 @@ export class BackgroundSession {
       ...(turn ? { turnId: this.pending, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline - turn.startedAt, repair: turn.repair } : {}),
     };
   }
-  stop(): void { this.stopped = true; this.chat.dispose?.(); this.turns.clear(); }
+  stop(): void { this.stopped = true; this.readAbort?.abort(); this.chat.dispose?.(); this.turns.clear(); }
 
   allowNextBatch(): void {
     if (this.stopped || this.terminal) throw new BridgeError("SESSION_LOST", "This session cannot continue.");
@@ -165,11 +183,25 @@ export class BackgroundSession {
     this.used = 0;
   }
 
-  async finish(policy: "delete" | "retain"): Promise<void> {
-    if (this.busy) throw new BridgeError("CALL_BUSY", "Wait for the active call before finishing.");
+  async finish(policy: CleanupPolicy): Promise<void> {
+    if (this.finishing) {
+      if (this.finishing.policy !== policy) throw new BridgeError("CLEANUP_PENDING", "Another cleanup policy is still in progress.");
+      return this.finishing.promise;
+    }
     if (this.stopped) throw new BridgeError("SESSION_LOST", "This session has already ended.");
-    if (policy !== "delete" && policy !== "retain") throw new BridgeError("INVALID_REQUEST", "Select an explicit cleanup policy.");
+    if (!isCleanupPolicy(policy)) throw new BridgeError("INVALID_REQUEST", "Select an explicit cleanup policy.");
+    this.endRequested = true;
+    this.readAbort?.abort();
+    const promise = this.finishAfterRead(policy);
+    this.finishing = { policy, promise };
+    try { await promise; } finally { this.finishing = undefined; }
+  }
+
+  private async finishAfterRead(policy: CleanupPolicy): Promise<void> {
+    await this.idle;
+    if (this.stopped) throw new BridgeError("SESSION_LOST", "The plugin stopped before cleanup.");
     this.busy = true;
+    this.cleanupFailed = false; this.cleanupReason = null;
     try {
       // The adapter must verify created ownership, user intervention and stream terminal state.
       await this.chat.finish(policy);

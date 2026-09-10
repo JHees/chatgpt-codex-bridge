@@ -7,6 +7,7 @@ export interface AppChatClient {
   getConversationStreamStatus(id: string): Promise<unknown>;
   delete(id: string): Promise<unknown>;
   rename?(id: string, title: string): Promise<unknown>;
+  setArchived?(id: string, archived: boolean): Promise<unknown>;
 }
 
 /** App resources and React state are external dependencies, never a second CDP client. */

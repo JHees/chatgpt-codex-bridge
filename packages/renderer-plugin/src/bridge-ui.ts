@@ -3,6 +3,7 @@ import type { CooperationController } from "./cooperation-controller.js";
 import type { ComposerHandle, LoaderApi } from "./loader-interface.js";
 import { menuIcon, mountModelMenu } from "./model-menu.js";
 import { bridgeStyle } from "./bridge-style.js";
+import { mountContextPresentation } from "./context-presentation.js";
 
 export const DEFAULTS_KEY = "collaboration-defaults-v1";
 
@@ -11,7 +12,9 @@ export class BridgeUi {
   private handle: ComposerHandle | undefined;
   private page: { open?(): Promise<void>; unregister(): void } | undefined;
   private closeQuick: (() => void) | undefined;
+  private stopContextPresentation: (() => void) | undefined;
   private readonly timers = new Set<ReturnType<typeof setInterval>>();
+  private readonly accessoryUpdates = new Map<string, () => void>();
   private readonly prepared = new Map<string, { bindingId: string; config: Readonly<PreparedConfiguration> }>();
   private lastError: string | null = null;
   private backgroundError: string | null = null;
@@ -41,11 +44,19 @@ export class BridgeUi {
 
   start(): void {
     this.document.head.append(this.css);
+    this.stopContextPresentation = mountContextPresentation(this.document, this.zh);
     this.page = this.api.settings?.registerPage({ id: "main", title: "Bridge", description: this.t("后台规划与任务执行协作", "Background planning and task execution"), render: root => {
       root.classList.add("bridge-controls"); this.renderDefaults(root);
       return () => { this.closeQuick?.(); root.replaceChildren(); root.classList.remove("bridge-controls", "bridge-settings"); };
     } });
-    this.handle = this.api.composer?.registerAccessory({ id: "collaboration", render: (root, owner) => this.renderAccessory(root, owner) });
+    this.handle = this.api.composer?.registerAccessory({ id: "collaboration", render: (root, owner) => this.renderAccessory(root, owner),
+      onChange: event => {
+        if (this.stopped || event.target !== "context" || event.action !== "removed" || !this.ownsMountedContext(event.identity)) return;
+        this.control.setEnabled(event.identity, false);
+        const key = JSON.stringify(event.identity);
+        this.prepared.delete(key); this.closeQuick?.(); this.accessoryUpdates.get(key)?.();
+      },
+    });
     this.refreshDiagnostics();
   }
   receipt(bindingId: string): unknown { return this.handle?.getSubmission?.(bindingId) ?? { state: "unavailable" }; }
@@ -58,7 +69,7 @@ export class BridgeUi {
     const current = this.handle?.getStatus();
     return !!current?.available && ("draftId" in owner ? current.draftId === owner.draftId : current.hostId === owner.hostId && current.taskId === owner.taskId);
   }
-  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareSubmission === "function", mounted: this.handle?.getStatus().available ?? false, errorCode: this.lastError }; }
+  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareSubmission === "function", mounted: this.handle?.getStatus().available ?? false, contextPresentation: this.handle?.getStatus().context?.display ?? "text", errorCode: this.lastError }; }
 
   private diagnosticsText(): string {
     const state = this.compatibility();
@@ -126,7 +137,31 @@ export class BridgeUi {
     const enabled = this.node("input"); enabled.type = "checkbox"; enabled.setAttribute("role", "switch"); enabled.checked = value.enabled;
     enabled.onchange = () => { if (!commit({ enabled: enabled.checked })) enabled.checked = value.enabled; };
     label(this.t("新任务默认启用", "Enable for new tasks"), enabled, this.t("由 Chat 规划，当前 Codex 执行与验证。", "Chat plans; the current Codex task executes and verifies."));
-    const option = (select: HTMLSelectElement, key: string, text: string): void => { const element = this.node("option", text); element.value = key; select.append(element); };
+    const choice = <T extends string | number>(title: string, options: readonly {value: T; label: string}[], current: () => T, change: (next: T) => void): HTMLButtonElement => {
+      const trigger = this.button("", () => {
+        const popup = this.openPopup(trigger, title); if (!popup) return;
+        popup.panel.classList.add("bridge-choice-popup");
+        const menu = this.node("div"); menu.setAttribute("role", "menu"); menu.setAttribute("aria-label", title); popup.panel.append(menu);
+        const rows = options.map(option => {
+          const row = this.button("", () => { change(option.value); update(); popup.close(); trigger.focus({preventScroll:true}); });
+          row.className = "bridge-model-row"; row.setAttribute("role", "menuitemradio"); row.setAttribute("aria-checked", String(current() === option.value));
+          row.append(this.node("span", option.label)); if (current() === option.value) row.append(menuIcon(this.document, "check"));
+          menu.append(row); return row;
+        });
+        menu.addEventListener("keydown", event => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const index = rows.indexOf(this.document.activeElement as HTMLButtonElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
+          rows[next]?.focus();
+        });
+        popup.position(); (rows.find(row => row.getAttribute("aria-checked") === "true") ?? rows[0])?.focus();
+      });
+      trigger.className = "bridge-preset-trigger bridge-choice-trigger";
+      trigger.setAttribute("aria-label", title); trigger.setAttribute("aria-haspopup", "dialog"); trigger.setAttribute("aria-expanded", "false");
+      const update = (): void => { trigger.replaceChildren(this.node("span", options.find(option => option.value === current())!.label), menuIcon(this.document, "next")); };
+      update(); return trigger;
+    };
     const picker = this.button("", () => {
       const popup = this.openPopup(picker, this.t("默认 Chat 模型", "Default Chat model"));
       if (!popup) return;
@@ -155,13 +190,13 @@ export class BridgeUi {
       input.oninput = change; input.onchange = change;
     };
     numeric(rounds, "maxRounds"); label(this.t("每批业务轮数（1–8）", "Business rounds per batch (1–8)"), rounds);
-    const window = this.node("select"); for (const seconds of [30, 60, 90]) option(window, String(seconds), `${seconds} s`);
-    window.value = String(value.readWindowSeconds); window.onchange = () => { if (!commit({ readWindowSeconds: Number(window.value) as 30 | 60 | 90 })) window.value = String(value.readWindowSeconds); }; label(this.t("单次读取窗口", "Read window"), window);
+    const windowTitle = this.t("单次读取窗口", "Read window");
+    label(windowTitle, choice(windowTitle, ([30, 60, 90] as const).map(seconds => ({value:seconds,label:`${seconds} s`})), () => value.readWindowSeconds, readWindowSeconds => { commit({readWindowSeconds}); }));
     const total = this.node("input"); total.type = "number"; total.min = "1"; total.max = "60"; total.step = "1"; total.value = String(value.totalWaitMinutes); total.required = true;
     numeric(total, "totalWaitMinutes"); label(this.t("单条回复总等待上限（分钟）", "Total wait per reply (minutes)"), total);
     section = group(this.t("会话处理", "Conversation handling"));
-    const cleanup = this.node("select"); option(cleanup, "delete", this.t("删除", "Delete")); option(cleanup, "retain", this.t("保留", "Retain")); cleanup.value = value.cleanup;
-    cleanup.onchange = () => { if (!commit({ cleanup: cleanup.value as "delete" | "retain" })) cleanup.value = value.cleanup; }; label(this.t("正常结束后的会话处理", "Conversation policy after verified completion"), cleanup);
+    const cleanupTitle = this.t("正常结束后的会话处理", "Conversation policy after verified completion");
+    label(cleanupTitle, choice(cleanupTitle, [{value:"delete",label:this.t("删除", "Delete")}, {value:"archive",label:this.t("归档", "Archive")}, {value:"retain",label:this.t("保留", "Retain")}] as const, () => value.cleanup, cleanup => { commit({cleanup}); }));
     form.append(status);
     form.onsubmit = event => { event.preventDefault(); };
     return form;
@@ -198,11 +233,13 @@ export class BridgeUi {
       }
     };
     // Loader can call render synchronously before returning its handle.
+    this.accessoryUpdates.set(key, update);
     queueMicrotask(update);
     const timer = setInterval(update, 1000); this.timers.add(timer);
-    return () => { this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
+    return () => { this.accessoryUpdates.delete(key); this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
   }
   private stateLabel(state: string): string {
+    if (state === "ending") return this.t("正在结束协作", "Ending collaboration");
     if (state === "repair-required") return this.t("等待 Codex 续读修复回复", "Waiting for Codex to continue repair");
     if (state === "awaiting-verification") return this.t("Chat 已回复 · 待 Codex 核对", "Chat replied · Codex review pending");
     if (state === "actions-returned") return this.t("Chat 已回复 · 待 Codex 处理", "Chat replied · Codex action pending");
@@ -214,7 +251,8 @@ export class BridgeUi {
     const text = this.t(
       `使用随包 bridge-chat skill 协作：Chat 规划，Codex 执行并回报证据；沿用现有权限，接入失败时暂停。Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}。配置 ${config.id}；其余参数由 status 读取。`,
       `Use the bundled bridge-chat skill: Chat plans; Codex executes and reports evidence under existing permissions. Pause if connection fails. Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}. Configuration ${config.id}; read remaining parameters with status.`);
-    const receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text });
+    const summary = this.handle?.getStatus().contextDisplay === "collapsed-v1" ? this.t("Chat 协作", "Chat collaboration") + ` · ${config.model.title} · ${config.model.effortLabel}` : undefined;
+    const receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text, ...(summary ? {summary} : {}) });
     this.control.register(receipt.bindingId, owner, config);
     this.prepared.set(JSON.stringify(owner), { bindingId: receipt.bindingId, config });
   }
@@ -306,7 +344,21 @@ export class BridgeUi {
       if (active.usedRounds >= active.maxRounds && !active.busy) add(this.t("允许下一批", "Allow next batch"), "next-batch");
       if (active.state === "paused") add(this.t("继续等待", "Continue waiting"), "continue-waiting");
       if (active.state === "needs-user") add(this.t("已提供所需确认", "Required confirmation provided"), "user-confirmed");
-      for (const policy of ["retain", "delete"] as const) actions.append(this.button(policy === "retain" ? this.t("结束并保留", "End and retain") : this.t("结束并删除", "End and delete"), async () => { await this.control.endFromUi({ task: owner, sessionId: active.sessionId, policy }); close(); }));
+      for (const policy of ["retain", "archive", "delete"] as const) {
+        const labels = {retain:this.t("结束并保留", "End and retain"),archive:this.t("结束并归档", "End and archive"),delete:this.t("结束并删除", "End and delete")};
+        actions.append(this.button(labels[policy], async () => {
+          for (const button of actions.querySelectorAll("button")) button.disabled = true;
+          state.textContent = this.t("正在结束协作…", "Ending collaboration…");
+          try { await this.control.endFromUi({ task: owner, sessionId: active.sessionId, policy }); if (this.ownsMountedContext(owner)) this.handle?.clearContext(); close(); }
+          catch (error) {
+            const current = this.control.status({task:owner}).active;
+            state.textContent = current?.cleanupReason === "CLEANUP_UNSAFE"
+              ? this.t("Chat 仍在生成或归属尚未确认；完成后可重试，也可结束并保留。", "Chat is still generating or ownership is unconfirmed. Retry after completion, or end and retain.")
+              : this.t("结束未完成，可以重试或保留会话。", "Ending did not complete. Retry or retain the conversation.");
+            throw error;
+          } finally { for (const button of actions.querySelectorAll("button")) button.disabled = false; }
+        }));
+      }
     }
     const error = this.node("p", this.lastError ?? ""); error.dataset.bridgeError = "true"; error.className = "bridge-quick-state"; error.setAttribute("role", "status"); panel.append(error);
     position();
@@ -314,7 +366,8 @@ export class BridgeUi {
   }
   stop(): void {
     this.stopped = true; this.closeQuick?.(); this.handle?.unregister(); this.page?.unregister();
+    this.stopContextPresentation?.(); this.stopContextPresentation = undefined;
     for (const timer of this.timers) clearInterval(timer); this.timers.clear();
-    this.prepared.clear(); this.css.remove();
+    this.prepared.clear(); this.accessoryUpdates.clear(); this.css.remove();
   }
 }

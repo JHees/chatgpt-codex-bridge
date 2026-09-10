@@ -1,6 +1,6 @@
 import type { AppChatClient } from "./app-chat-runtime.js";
 import type { BackgroundChatPort } from "./background-session.js";
-import type { ChatModel } from "./chat-configuration.js";
+import type { ChatModel, CleanupPolicy } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
 
 export interface NativeCompletionInput {
@@ -38,6 +38,8 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
   private terminal: BridgeError | undefined;
   private disposed = false;
   private deletion: Promise<unknown> | undefined;
+  private cleanupPolicy: CleanupPolicy | undefined;
+  private cleanupPending = false;
   private titleAttempted = false;
   private ownedTitle: string | undefined;
   private titleError: string | null = null;
@@ -125,8 +127,16 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     return id;
   }
 
-  async read(messageId: string, waitMs: number): Promise<{ state: "waiting" } | { state: "complete"; text: string }> {
+  async read(messageId: string, waitMs: number, signal?: AbortSignal): Promise<{ state: "waiting" } | { state: "complete"; text: string }> {
+    const interrupt = (): void => this.notify();
+    signal?.addEventListener("abort", interrupt, { once: true });
+    try { return await this.readPending(messageId, waitMs, signal); }
+    finally { signal?.removeEventListener("abort", interrupt); }
+  }
+
+  private async readPending(messageId: string, waitMs: number, signal?: AbortSignal): Promise<{ state: "waiting" } | { state: "complete"; text: string }> {
     this.assertCurrent();
+    if (signal?.aborted) throw new BridgeError("SESSION_ENDING", "Local reading stopped; native generation is not cancelled.");
     const turn = this.sent.get(messageId);
     if (!turn) throw new BridgeError("TURN_MISMATCH", "The native message does not belong to this session.");
     if (!Number.isFinite(waitMs) || waitMs <= 0 || waitMs > 90_000) throw new BridgeError("INVALID_REQUEST", "The native read window must be positive and no more than 90 seconds.");
@@ -138,6 +148,7 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
         this.wake.add(finish);
       });
       this.assertCurrent();
+      if (signal?.aborted) throw new BridgeError("SESSION_ENDING", "Local reading stopped.");
     }
     if (!turn.done) return { state: "waiting" };
     if (turn.reply !== undefined) return { state: "complete", text: turn.reply };
@@ -152,6 +163,7 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
         timer = setTimeout(release, Math.max(1, deadline - performance.now()));
       })]);
       this.assertCurrent();
+      if (signal?.aborted) throw new BridgeError("SESSION_ENDING", "Local reading stopped.");
       if (result.state === "waiting" && performance.now() < deadline) {
         // Native completion metadata can lag the stream callback. Preserve the
         // read window instead of returning immediately into a caller retry loop.
@@ -200,18 +212,35 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     return { state: "complete", text };
   }
 
-  async finish(policy: "delete" | "retain"): Promise<void> {
-    if (policy === "retain") { this.dispose(); return; }
+  async finish(policy: CleanupPolicy): Promise<void> {
+    if (policy === "retain") {
+      if (this.cleanupPending) throw new BridgeError("CLEANUP_PENDING", "A native cleanup request is already in flight; retention cannot undo it.");
+      this.dispose(); return;
+    }
     this.assertCurrent();
-    if (this.deletion) { await this.bounded(this.deletion, "CLEANUP_PENDING"); this.dispose(); return; }
-    if (!this.conversationId || !this.last?.resolved || [...this.sent.values()].some(turn => !turn.done)) throw new BridgeError("CLEANUP_UNSAFE", "Retain the conversation while generation or correlation is unresolved.");
+    if (this.cleanupPolicy && this.cleanupPolicy !== policy) throw new BridgeError("CLEANUP_PENDING", "The previous cleanup outcome must be resolved before changing policy.");
+    if (policy === "archive" && !this.client.setArchived) throw new BridgeError("ARCHIVE_UNSUPPORTED", "The native Chat client does not support archiving.");
+    if (this.deletion) { await this.bounded(this.deletion, "CLEANUP_PENDING"); await this.confirmCleanup(policy); this.dispose(); return; }
+    if (!this.conversationId || !this.last || [...this.sent.values()].some(turn => !turn.done)) throw new BridgeError("CLEANUP_UNSAFE", "Chat is still generating or its identity is unresolved. Retry after completion or end and retain.");
+    // A local waiter may have been interrupted before fetching an already completed reply.
+    if (!this.last.resolved) await this.bounded(this.last.reading ?? this.completedReply(this.last), "CLEANUP_PENDING");
+    if (!this.last.resolved) throw new BridgeError("CLEANUP_UNSAFE", "The final native reply is not yet confirmed.");
     await this.check();
     this.assertCurrent();
-    this.deletion = this.client.delete(this.conversationId).then(result => {
-      if (object(result)?.error || object(result)?.success === false) throw new BridgeError("CHAT_REQUEST_FAILED", "The native deletion was rejected.");
-    }).catch(error => { this.deletion = undefined; throw error; });
+    this.cleanupPolicy = policy;
+    this.cleanupPending = true;
+    this.deletion = (policy === "archive" ? this.client.setArchived!(this.conversationId, true) : this.client.delete(this.conversationId)).then(result => {
+      if (object(result)?.error || object(result)?.success === false) throw new BridgeError("CHAT_REQUEST_FAILED", "The native cleanup was rejected.");
+    }).catch(error => { this.deletion = undefined; this.cleanupPolicy = undefined; throw error; }).finally(() => { this.cleanupPending = false; });
     await this.bounded(this.deletion, "CLEANUP_PENDING");
+    await this.confirmCleanup(policy);
     this.dispose();
+  }
+
+  private async confirmCleanup(policy: CleanupPolicy): Promise<void> {
+    if (policy !== "archive") return;
+    const conversation = await this.ownedConversation();
+    if (conversation.is_archived !== true) throw new BridgeError("ARCHIVE_UNCONFIRMED", "Archive has not been confirmed; retry to read the same target.");
   }
 
   dispose(): void { this.disposed = true; this.sent.clear(); this.last = undefined; this.notify(); }

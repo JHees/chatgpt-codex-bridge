@@ -1,5 +1,9 @@
 /** Scoped native-token styling; no dependency on another plugin or App class names. */
 export const bridgeStyle = `
+[data-bridge-sent-collapsed]{display:none!important}
+[data-bridge-sent-toggle]{display:block;margin:6px 0;padding:4px 0;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;text-align:start;cursor:pointer;opacity:.8}
+[data-bridge-sent-toggle]:hover{opacity:1;text-decoration:underline}
+[data-bridge-sent-toggle]:focus-visible{outline:2px solid var(--color-border-focus,Highlight);outline-offset:2px;border-radius:4px}
 .bridge-controls{--bridge-fg:var(--color-text,CanvasText);--bridge-muted:var(--color-text-secondary,GrayText);--bridge-bg:var(--color-background-surface,Canvas);--bridge-border:var(--color-border,ButtonBorder);--bridge-hover:var(--color-token-bg-secondary,ButtonFace);box-sizing:border-box;min-width:0;font:var(--text-sm,13px)/1.5 var(--font-sans,system-ui);color:var(--bridge-fg)}
 .bridge-controls *{box-sizing:border-box}
 .bridge-controls button,.bridge-controls select,.bridge-controls input{font:inherit;color:inherit;max-width:100%}
@@ -39,6 +43,7 @@ export const bridgeStyle = `
 .bridge-menu-heading{font-size:12px;font-weight:500;color:var(--bridge-muted);padding:7px 8px 4px}
 .bridge-controls .bridge-menu-note{font-size:11px;line-height:1.5;color:var(--bridge-muted);padding:6px 8px 4px;margin:4px 0 0;border-top:1px solid var(--bridge-border)}
 .bridge-controls .bridge-preset-trigger{display:flex;align-items:center;gap:8px;max-width:270px;text-align:right;flex-shrink:0;padding:5px 8px}.bridge-preset-trigger svg{flex:none}
+.bridge-controls .bridge-choice-trigger{min-height:28px;font-weight:400}.bridge-choice-trigger svg{transform:rotate(90deg);width:14px;height:14px}.bridge-choice-popup{width:200px;background:var(--color-token-dropdown-background,var(--bridge-bg));border-radius:12px}
 .bridge-popover .bridge-quick-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:36px;padding:4px 8px;border-radius:9px}
 .bridge-popover .bridge-quick-row select{max-width:190px;padding:3px 7px;font-size:12px;background:transparent;border-color:transparent;text-align-last:right}
 .bridge-popover .bridge-quick-row:hover{background:var(--bridge-hover)}

@@ -1,5 +1,6 @@
 import { BackgroundSession, type BackgroundChatPort, type BackgroundResult } from "./background-session.js";
 import type { ChatConfiguration, ComposerIdentity, ConfigurationSnapshot, PreparedConfiguration, TaskIdentity } from "./chat-configuration.js";
+import { isCleanupPolicy, type CleanupPolicy } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
 import { parseBridgeRequest, ProtocolError } from "./protocol.js";
 
@@ -28,7 +29,7 @@ export class CooperationController {
   private readonly bindings = new Map<string, Binding>();
   private active: { bindingId: string; session: BackgroundSession } | undefined;
   // One bounded readback receipt survives automatic disposal, not a conversation journal.
-  private completed: { task: TaskIdentity; sessionId: string; bindingId: string; turnId: string; result: BackgroundResult; policy: "delete" | "retain" } | undefined;
+  private completed: { task: TaskIdentity; sessionId: string; bindingId: string; turnId?: string; result?: BackgroundResult; policy: CleanupPolicy } | undefined;
   private stopped = false;
 
   constructor(readonly configuration: ChatConfiguration, private readonly receipt: (bindingId: string) => unknown,
@@ -58,7 +59,7 @@ export class CooperationController {
     if (input.read !== undefined) {
       const read = fields(input.read, ["sessionId", "turnId"]);
       if (this.completed && sameTask(task, this.completed.task) && read.sessionId === this.completed.sessionId && bindingId === this.completed.bindingId) {
-        turn = read.turnId === this.completed.turnId ? structuredClone(this.completed.result) : {state:"not-found",turnId:id(read.turnId)};
+        turn = this.completed.result && read.turnId === this.completed.turnId ? structuredClone(this.completed.result) : {state:"not-found",turnId:id(read.turnId)};
       } else {
         const target = this.owned(task, id(read.sessionId));
         if (!bindingId || target.bindingId !== bindingId) throw new BridgeError("SESSION_MISMATCH", "Readback must use the original submission binding.");
@@ -124,28 +125,31 @@ export class CooperationController {
     return result;
   }
 
-  async finish(payload: unknown): Promise<{ state: "ended"; policy: "delete" | "retain" }> {
+  async finish(payload: unknown): Promise<{ state: "ended"; policy: CleanupPolicy }> {
     return await this.end(payload, false);
   }
-  async endFromUi(payload: unknown): Promise<{ state: "ended"; policy: "delete" | "retain" }> {
+  async endFromUi(payload: unknown): Promise<{ state: "ended"; policy: CleanupPolicy }> {
     return await this.end(payload, true);
   }
-  private async end(payload: unknown, explicitUserEnd: boolean): Promise<{ state: "ended"; policy: "delete" | "retain" }> {
+  private async end(payload: unknown, explicitUserEnd: boolean): Promise<{ state: "ended"; policy: CleanupPolicy }> {
     this.check();
-    const input = fields(payload, ["task", "sessionId", "policy"]);
+    const input = fields(payload, ["task", "sessionId", "policy"], ["reason"]);
+    if (input.reason !== undefined && input.reason !== "user-request") throw new BridgeError("INVALID_REQUEST", "Unknown termination reason.");
+    // This declares intent, not authorization: the executor must have the user's request.
+    explicitUserEnd ||= input.reason === "user-request";
+    if (!isCleanupPolicy(input.policy)) throw new BridgeError("INVALID_REQUEST", "Choose delete, archive or retain explicitly.");
     if (this.completed && sameTask(identity(input.task),this.completed.task) && id(input.sessionId) === this.completed.sessionId) {
       if (input.policy !== this.completed.policy) throw new BridgeError("SESSION_LOST", "An ended conversation cannot change its cleanup policy.");
       return {state:"ended",policy:this.completed.policy};
     }
     const active = this.owned(identity(input.task), id(input.sessionId));
-    if (input.policy !== "delete" && input.policy !== "retain") throw new BridgeError("INVALID_REQUEST", "Choose delete or retain explicitly.");
-    if (input.policy === "delete" && !explicitUserEnd && !active.session.hasCompletedReport()) throw new BridgeError("COMPLETION_UNVERIFIED", "Report completed local verification and obtain planner confirmation before automatic cleanup; explicit termination is available in the task panel.");
+    if (input.policy !== "retain" && !explicitUserEnd && !active.session.hasCompletedReport()) throw new BridgeError("COMPLETION_UNVERIFIED", "Report verified completion before automatic cleanup, or end in response to an explicit user request.");
     const completed = active.session.completedReply();
     await active.session.finish(input.policy);
-    if (completed) this.completed = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy};
+    this.completed = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy};
     const binding = this.bindings.get(active.bindingId);
     if (binding) binding.ended = true;
-    this.active = undefined;
+    if (this.active === active) this.active = undefined;
     return { state: "ended", policy: input.policy };
   }
 
