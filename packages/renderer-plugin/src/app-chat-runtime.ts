@@ -1,4 +1,5 @@
 import { BridgeError } from "./errors.js";
+import { discoverBundledChatRuntime } from "./bundled-chat-runtime.js";
 
 export interface AppChatClient {
   models(): Promise<unknown>;
@@ -20,7 +21,7 @@ export interface AppChatEnvironment {
   importModule(url: string): Promise<unknown>;
 }
 
-interface Scope {
+export interface Scope {
   query: unknown;
   get(key: unknown): unknown;
 }
@@ -82,6 +83,7 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
   if (queue.length === 0 || queue.length > MAX_SOURCES) throw new BridgeError("APP_UNSUPPORTED", "App entry resources could not be identified uniquely within limits.");
   const visited = new Set<string>();
   const clients = new Set<string>();
+  const bundledSources = new Map<string, string>();
   let bytes = 0;
   while (queue.length > 0) {
     const url = queue.shift()!;
@@ -95,6 +97,7 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
     catch { throw new BridgeError("APP_UNSUPPORTED", "An App resource could not be read."); }
     bytes += new TextEncoder().encode(source).length;
     if (bytes > MAX_SOURCE_BYTES) throw new BridgeError("APP_UNSUPPORTED", "App resources exceeded the discovery size limit.");
+    if (initialPattern.test(basename)) bundledSources.set(url, source);
     // Follow only local, literal references in the observed entry graph; never evaluate source text.
     for (const match of source.matchAll(/["'`]\.\/([A-Za-z0-9_-]+\.js)["'`]/g)) {
       const name = match[1]!;
@@ -102,6 +105,8 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
       else if (initialPattern.test(name)) queue.push(`app://-/assets/${name}`);
     }
   }
+  if (clients.size === 0) return discoverBundledChatRuntime(environment, bundledSources,
+    () => scopesFrom(environment.currentRoot ? environment.currentRoot() : environment.root));
   if (clients.size !== 1) throw new BridgeError("APP_UNSUPPORTED", "Exactly one referenced App Chat client module is required.");
   let module: Record<string, unknown> | undefined;
   try { module = object(await environment.importModule([...clients][0]!)); }

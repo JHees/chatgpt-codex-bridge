@@ -4,7 +4,7 @@
 
 Bridge connects a user-selected **App Chat planner** to the **current Codex executor**. It keeps both model choices independent: Chat can plan and revise; Codex uses its existing tools and permissions to execute, verify and deliver.
 
-**Bridge 0.1.3** adds collapsible instructions in drafts and sent messages, two-way synchronization between Remove and the collaboration switch, compact settings menus, and explicit delete/archive/retain handling without a busy local read blocking termination. See [release notes](docs/RELEASE-0.1.3.md) and [validation scope](docs/UX-ITERATION.md). Building this repository does not update an installed package. Historical changes remain documented in the [0.1.2 notes](docs/RELEASE-0.1.2.md) and [0.1.1 notes](docs/RELEASE-0.1.1.md).
+**Bridge 0.1.4** restores background Chat discovery after Codex moved its native services into the App entry bundle. It reuses the native model query, stream service and authenticated request client while retaining compatibility with the standalone client. See [release notes and validation scope](docs/RELEASE-0.1.4.md). Building this repository does not update an installed package. Historical changes remain documented in the [0.1.3 notes](docs/RELEASE-0.1.3.md), [0.1.2 notes](docs/RELEASE-0.1.2.md) and [0.1.1 notes](docs/RELEASE-0.1.1.md).
 
 ## Runtime
 
@@ -22,6 +22,8 @@ Three allowlisted operations cover the workflow:
 
 The App adapter discovers the current local resource graph and App-owned dependency scope. It sends and reads through the native Chat client, correlates messages and parent nodes, and checks ownership before cleanup. It does not navigate, focus a Chat textbox or request trusted Enter. It does not create a daemon, MCP server, webpage ChatGPT session, database writer, project reader or listening port.
 
+Discovery supports both the standalone Chat client and builds that bundle the native stream service, authenticated request client and normalized model query into the App entry module. Export aliases are resolved from their service relationships instead of fixed resource hashes. Unsupported or ambiguous services keep background collaboration unavailable; simulated compatibility tests do not replace a real Chat exchange on a new App build.
+
 ## User controls
 
 A Loader settings page saves defaults. A compact task control uses Loader's generic composer interface to prepare **visible, editable instructions** before normal native submission. Only an accepted, matching native receipt permits background collaboration. A configured switch is not proof that Codex has invoked Bridge.
@@ -36,7 +38,7 @@ Read the [Chinese usage guide](docs/USAGE.md), [bundled protocol reference](skil
 
 One ZIP contains the renderer and `skills/bridge-chat`, including the helper. Loader manages the skill with installation, updates and rollback. There is no second installation step.
 
-Use **native Windows Loader 0.5.12 or later** for the complete 0.1.3 experience, including folded drafts and two-way removal notifications. Loader 0.5.11 provides the base schema-v2 skill, settings/storage and native submission interfaces but lacks those UI extensions; older hosts fall back to visible instructions without reverse Remove synchronization. Check Bridge diagnostics before use; this plugin does not update Loader.
+Use **native Windows Loader 0.5.12 or later** for the complete 0.1.4 experience, including folded drafts and two-way removal notifications. Loader 0.5.11 provides the base schema-v2 skill, settings/storage and native submission interfaces but lacks those UI extensions; older hosts fall back to visible instructions without reverse Remove synchronization. Check Bridge diagnostics before use; this plugin does not update Loader.
 
 The update source remains [JHees/chatgpt-codex-bridge](https://github.com/JHees/chatgpt-codex-bridge). Stable releases use `bridge-{version}.zip` and its `.sha256`. Loader automatic replacement is opt-in; new permissions/local edits require confirmation. Main-branch CI artifacts are test packages, not Loader update releases. See [RELEASING.md](docs/RELEASING.md).
 
