@@ -25,7 +25,7 @@ export function start(api: LoaderApi): void {
   stop();
   const instance = epoch;
   let configuration: ChatConfiguration;
-  try { configuration = new ChatConfiguration(api.storage.get(DEFAULTS_KEY) ?? undefined, api.storage); }
+  try { configuration = new ChatConfiguration(api.storage.get(DEFAULTS_KEY) ?? api.storage.get("collaboration-defaults-v1") ?? undefined, api.storage); }
   catch { configuration = new ChatConfiguration(undefined, api.storage); backgroundError = "SAVED_CONFIGURATION_INVALID"; }
   let failures = 0;
   const schedule = (): void => {

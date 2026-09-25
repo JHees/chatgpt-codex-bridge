@@ -1,23 +1,29 @@
-# Bridge 0.1.5
+# Bridge
 
-English · [简体中文](https://github.com/JHees/chatgpt-codex-bridge/blob/main/README.zh-CN.md)
+**Chat plans. Codex builds. Bridge keeps them working together.**
 
-Connect a selected App Chat planner to the current Codex executor. Chat leads technical decisions; Codex reviews proposed actions, executes with its existing permissions, and returns evidence.
+Connect Chat Pro or another reasoning model to your current Codex task. Chat develops the plan and reviews results; Codex reviews proposed actions, edits files, and runs tests. Bridge carries the conversation between them automatically.
 
-## Install and use
+- Choose Chat and Codex models independently.
+- Exchange plans and results without manual copying.
+- Start collaboration from the Codex input area.
 
-Use native Windows Codex Script Loader 0.5.12+ and PowerShell 7. Install this ZIP through Loader; the renderer and `bridge-chat` skill are managed together. Choose a model in Bridge settings, enable collaboration for the task, review the visible instructions, and submit normally.
+Install this ZIP through Codex Script Loader, choose a Chat model, enable collaboration, and send your request. Requires Windows, the Codex desktop app with Chat access, Loader 0.5.12+, and PowerShell 7.
 
-0.1.5 adds delayed-start and idle-connection recovery with bounded attempts and backoff. Active sessions are preserved; uncertain messages are never replayed. The task menu shows remaining rounds and last-reply statistics. Default budget is 3 business rounds, including final feedback.
+[Get started](https://github.com/JHees/chatgpt-codex-bridge#readme) · [Usage guide](https://github.com/JHees/chatgpt-codex-bridge/blob/main/docs/USAGE.md)
 
-[Full English documentation](https://github.com/JHees/chatgpt-codex-bridge#readme) · [Release notes](https://github.com/JHees/chatgpt-codex-bridge/blob/main/docs/RELEASE-0.1.5.md)
+## 中文
 
-## 中文说明
+**Chat 负责规划，Codex 动手实现，Bridge 让两端自动协作。**
 
-Bridge 把所选 Chat 规划模型连接到当前 Codex 执行任务。Chat 主导技术决策，Codex 审核后按现有权限执行并回传证据。
+把 Chat Pro 等推理模型接入当前 Codex 任务。Chat 制定方案、复核结果；Codex 审核操作、修改文件、运行测试。Bridge 自动传递两端的计划和结果，省去手动复制消息。
 
-需要原生 Windows Loader 0.5.12+ 与 PowerShell 7。通过 Loader 安装整个 ZIP，renderer 与 skill 一起管理。在 Bridge 设置中选好模型，在当前任务开启协作，检查可见说明后正常提交。
+- Chat 与 Codex 模型独立选择。
+- 计划与执行结果自动往返。
+- 从 Codex 输入区直接开启协作。
 
-0.1.5 增加启动延迟和空闲连接失效的自动恢复，带超时及退避。活动会话保留，不自动重发不确定消息。任务菜单提供剩余轮次和最近回复统计；默认3轮包含最终反馈。重载只恢复偏好，不恢复活动会话；有旧草稿说明时可明确选择重新准备。
+通过 Codex Script Loader 安装本 ZIP，选择 Chat 模型并开启协作，即可发送需求。需要 Windows、可使用 Chat 的 Codex 桌面应用、Loader 0.5.12+ 和 PowerShell 7。
 
-[完整中文文档](https://github.com/JHees/chatgpt-codex-bridge/blob/main/README.zh-CN.md)
+[开始使用](https://github.com/JHees/chatgpt-codex-bridge/blob/main/README.zh-CN.md) · [使用指南](https://github.com/JHees/chatgpt-codex-bridge/blob/main/docs/USAGE.md)
+
+[MIT License](https://github.com/JHees/chatgpt-codex-bridge/blob/main/LICENSE)

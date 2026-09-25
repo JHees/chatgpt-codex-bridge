@@ -5,9 +5,8 @@ export type ComposerIdentity = TaskIdentity | { draftId: string };
 export interface ChatSettings {
   enabled: boolean;
   modelKey: string | null;
-  maxRounds: number;
-  readWindowSeconds: 30 | 60 | 90;
-  totalWaitMinutes: number;
+  maxRequests: number | null;
+  replyTimeoutMinutes: number | null;
   cleanup: CleanupPolicy;
 }
 export interface ChatModel {
@@ -28,11 +27,11 @@ export interface ConfigurationSnapshot {
 }
 export type PreparedConfiguration = Omit<ConfigurationSnapshot, "task">;
 export interface TaskPreferenceStore { get(key: string): unknown; set(key: string, value: unknown): unknown }
-const taskPrefix = "task-preferences-v1:";
+const taskPrefix = "task-preferences-v2:";
 
 export type CleanupPolicy = "delete" | "archive" | "retain";
 export const isCleanupPolicy = (value: unknown): value is CleanupPolicy => value === "delete" || value === "archive" || value === "retain";
-const initial: ChatSettings = { enabled: false, modelKey: null, maxRounds: 3, readWindowSeconds: 90, totalWaitMinutes: 15, cleanup: "delete" };
+const initial: ChatSettings = { enabled: false, modelKey: null, maxRequests: null, replyTimeoutMinutes: null, cleanup: "delete" };
 
 function record(value: unknown, code = "INVALID_CONFIGURATION"): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new BridgeError(code, "Expected a configuration object.");
@@ -51,11 +50,23 @@ function settings(value: unknown): ChatSettings {
   const input = record(value);
   if (Object.keys(input).some(key => !(key in initial)) || Object.keys(input).length !== Object.keys(initial).length
     || typeof input.enabled !== "boolean" || !(input.modelKey === null || string(input.modelKey))
-    || !Number.isInteger(input.maxRounds) || Number(input.maxRounds) < 1 || Number(input.maxRounds) > 8
-    || ![30, 60, 90].includes(Number(input.readWindowSeconds)) || typeof input.readWindowSeconds !== "number"
-    || !Number.isInteger(input.totalWaitMinutes) || Number(input.totalWaitMinutes) < 1 || Number(input.totalWaitMinutes) > 60
+    || !optionalLimit(input.maxRequests) || !optionalLimit(input.replyTimeoutMinutes)
     || !isCleanupPolicy(input.cleanup)) throw new BridgeError("INVALID_CONFIGURATION", "Configuration values are invalid or unsupported.");
-  return { enabled: input.enabled, modelKey: input.modelKey, maxRounds: Number(input.maxRounds), readWindowSeconds: input.readWindowSeconds as 30 | 60 | 90, totalWaitMinutes: Number(input.totalWaitMinutes), cleanup: input.cleanup };
+  return { enabled: input.enabled, modelKey: input.modelKey, maxRequests: input.maxRequests, replyTimeoutMinutes: input.replyTimeoutMinutes, cleanup: input.cleanup };
+}
+
+function optionalLimit(value: unknown): value is number | null { return value === null || typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+function savedSettings(value: unknown): ChatSettings {
+  const input = record(value);
+  if (!("maxRounds" in input)) return settings(input);
+  const keys = ["enabled", "modelKey", "maxRounds", "readWindowSeconds", "totalWaitMinutes", "cleanup"];
+  if (Object.keys(input).length !== keys.length || Object.keys(input).some(key => !keys.includes(key))
+    || typeof input.maxRounds !== "number" || !Number.isInteger(input.maxRounds) || input.maxRounds < 1 || input.maxRounds > 8
+    || ![30, 60, 90].includes(input.readWindowSeconds as number) || typeof input.totalWaitMinutes !== "number"
+    || !Number.isInteger(input.totalWaitMinutes) || input.totalWaitMinutes < 1 || input.totalWaitMinutes > 60) throw new BridgeError("INVALID_CONFIGURATION", "Legacy configuration is invalid.");
+  return settings({ enabled: input.enabled, modelKey: input.modelKey, cleanup: input.cleanup,
+    maxRequests: input.maxRounds === 3 ? null : input.maxRounds,
+    replyTimeoutMinutes: input.totalWaitMinutes === 15 ? null : input.totalWaitMinutes });
 }
 
 /** Durable preferences only. Session state, prompts and task history never enter storage. */
@@ -65,7 +76,7 @@ export class ChatConfiguration {
   private readonly overrides = new Set<string>();
   private catalog: ChatModel[] = [];
 
-  constructor(savedDefaults: unknown = initial, private readonly store?: TaskPreferenceStore) { this.global = settings(savedDefaults); }
+  constructor(savedDefaults: unknown = initial, private readonly store?: TaskPreferenceStore) { this.global = savedSettings(savedDefaults); }
   defaults(): ChatSettings { return { ...this.global }; }
   saveDefaults(input: unknown): void { this.global = settings(input); }
   models(): ChatModel[] { return this.catalog.map(model => ({ ...model })); }
@@ -121,16 +132,16 @@ export class ChatConfiguration {
     if (value === undefined) {
       if ("draftId" in identity) value = { ...this.global };
       else {
-        const saved = this.store?.get(taskPrefix + key);
+        const saved = this.store?.get(taskPrefix + key) ?? this.store?.get("task-preferences-v1:" + key);
         if (saved !== undefined && saved !== null) {
           const entry = record(saved);
-          if (entry.version !== 1 || !["observed", "chosen", "new"].includes(String(entry.origin))) throw new BridgeError("SAVED_TASK_INVALID", "The saved task preferences cannot be read.");
-          value = settings(entry.settings);
+          if ((entry.version !== 1 && entry.version !== 2) || !["observed", "chosen", "new"].includes(String(entry.origin))) throw new BridgeError("SAVED_TASK_INVALID", "The saved task preferences cannot be read.");
+          value = savedSettings(entry.settings);
           if (entry.origin !== "observed") this.overrides.add(key);
         } else {
           // An unrecorded existing task is not a newly-created task.
           value = { ...this.global, enabled: false };
-          this.store?.set(taskPrefix + key, { version: 1, origin: "observed", settings: value });
+          this.store?.set(taskPrefix + key, { version: 2, origin: "observed", settings: value });
         }
       }
       this.tasks.set(key, value);
@@ -162,7 +173,7 @@ export class ChatConfiguration {
   resetTasks(): void { this.tasks.clear(); this.overrides.clear(); }
   private persist(identity: ComposerIdentity, value: ChatSettings, origin: "chosen" | "new"): void {
     const key = taskKey(identity);
-    if (!("draftId" in identity)) this.store?.set(taskPrefix + key, { version: 1, origin, settings: { ...value } });
+    if (!("draftId" in identity)) this.store?.set(taskPrefix + key, { version: 2, origin, settings: { ...value } });
     this.tasks.set(key, value);
   }
 }

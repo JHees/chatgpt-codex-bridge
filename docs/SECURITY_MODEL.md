@@ -18,6 +18,6 @@ Natural-language replies require an explicit state header: completion is not inf
 
 Only defaults and task preferences persist. Prompts, Chat IDs, sessions and execution history do not. Unknown existing tasks start disabled. Pro remains explicit; unavailable models are not replaced.
 
-Automatic deletion requires a completed executor report and planner confirmation, then adapter ownership/generation checks. This report is an attestation, not independent proof that tools ran. User intervention, unresolved generation or uncertain ownership prevents deletion. A [bridge] title alone never authorizes deletion. Failed cleanup preserves the exact active target; retain releases it. One latest completed reply supports lost-output recovery without resending or repeating actions.
+Automatic deletion requires a completed executor report and planner confirmation, then adapter ownership/generation checks. This report is an attestation, not independent proof that tools ran. User intervention, unresolved generation or uncertain ownership prevents deletion. A [bridge] title alone never authorizes deletion. Failed cleanup of verified work preserves the exact target independently of the active slot; retain releases it. Its verified reply and the latest completion receipt support lost-output recovery without resending or repeating actions.
 
 No restart recovery or historical cleanup runs. The plugin does not extract credentials, write databases, start a daemon/MCP/worker or create web ChatGPT targets. Disabling collaboration cannot retract data already sent.

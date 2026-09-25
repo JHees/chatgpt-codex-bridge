@@ -119,7 +119,9 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
         startObserved(); this.notify();
       });
       await Promise.race([started, new Promise<void>(resolve => {
-        timer = setTimeout(() => { this.fail("SEND_UNCERTAIN"); resolve(); }, 10_000);
+        // Startup can outlive this host window. Keep the registered message and
+        // native invocation alive; read() will wait for its callbacks, never resend.
+        timer = setTimeout(resolve, 10_000);
       })]);
     } catch { this.fail("SEND_UNCERTAIN"); }
     finally { clearTimeout(timer); this.wake.delete(startObserved); }

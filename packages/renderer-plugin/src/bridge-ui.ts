@@ -5,7 +5,7 @@ import { menuIcon, mountModelMenu } from "./model-menu.js";
 import { bridgeStyle } from "./bridge-style.js";
 import { mountContextPresentation } from "./context-presentation.js";
 
-export const DEFAULTS_KEY = "collaboration-defaults-v1";
+export const DEFAULTS_KEY = "collaboration-defaults-v2";
 
 export function bundledSkillDiagnostics(zh = false) {
   return { bundledSkill: "loader-managed-unverified", bundledSkillNote: zh
@@ -188,21 +188,19 @@ export class BridgeUi {
     updatePicker();
     label(this.t("默认模型与思考程度", "Default model and thinking level"), picker, this.t("任务切换模型时，优先使用此档位；不支持时匹配最接近的可用值。", "Task model changes use this level, or the closest supported level."));
     const warning = this.node("p", this.t("Pro 仅在明确选择或继承已保存的 Pro 默认值时使用。不会自动替换失效模型。", "Pro is opt-in, including saved Pro defaults. Unavailable models are never substituted.")); warning.className = "bridge-note"; form.append(warning);
-    section = group(this.t("轮数与等待", "Rounds and waiting"));
-    const rounds = this.node("input"); rounds.type = "number"; rounds.min = "1"; rounds.max = "8"; rounds.step = "1"; rounds.value = String(value.maxRounds); rounds.required = true;
-    const numeric = (input: HTMLInputElement, field: "maxRounds" | "totalWaitMinutes"): void => {
+    section = group(this.t("可选限制", "Optional limits"));
+    const rounds = this.node("input"); rounds.type = "number"; rounds.min = "1"; rounds.step = "1"; rounds.value = value.maxRequests === null ? "" : String(value.maxRequests); rounds.placeholder = this.t("不限", "None");
+    const numeric = (input: HTMLInputElement, field: "maxRequests" | "replyTimeoutMinutes"): void => {
       const change = (): void => {
-        const valid = input.value !== "" && Number.isInteger(Number(input.value)) && input.checkValidity();
+        const valid = !input.validity.badInput && (input.value === "" || Number.isSafeInteger(Number(input.value)) && input.checkValidity());
         if (!valid) { input.setAttribute("aria-invalid", "true"); status.textContent = this.t("未保存：请输入范围内的整数。", "Not saved: enter a whole number within the allowed range."); return; }
-        input.removeAttribute("aria-invalid"); commit({ [field]: Number(input.value) });
+        input.removeAttribute("aria-invalid"); commit({ [field]: input.value === "" ? null : Number(input.value) });
       };
       input.oninput = change; input.onchange = change;
     };
-    numeric(rounds, "maxRounds"); label(this.t("每批业务轮数（1–8）", "Business rounds per batch (1–8)"), rounds, this.t("结果反馈和最终验收也计入轮数。", "Result feedback and final verification also count toward the budget."));
-    const windowTitle = this.t("单次读取窗口", "Read window");
-    label(windowTitle, choice(windowTitle, ([30, 60, 90] as const).map(seconds => ({value:seconds,label:`${seconds} s`})), () => value.readWindowSeconds, readWindowSeconds => { commit({readWindowSeconds}); }));
-    const total = this.node("input"); total.type = "number"; total.min = "1"; total.max = "60"; total.step = "1"; total.value = String(value.totalWaitMinutes); total.required = true;
-    numeric(total, "totalWaitMinutes"); label(this.t("单条回复总等待上限（分钟）", "Total wait per reply (minutes)"), total);
+    numeric(rounds, "maxRequests"); label(this.t("总请求上限", "Total request limit"), rounds, this.t("留空则持续推进到任务完成。设置上限时，结果反馈和最终验收也计入。", "Leave empty to work until completion. An optional cap includes feedback and final verification."));
+    const total = this.node("input"); total.type = "number"; total.min = "1"; total.step = "1"; total.value = value.replyTimeoutMinutes === null ? "" : String(value.replyTimeoutMinutes); total.placeholder = this.t("不限", "None");
+    numeric(total, "replyTimeoutMinutes"); label(this.t("回复硬超时（分钟）", "Hard reply timeout (minutes)"), total, this.t("留空则长时间等待仅提醒；设置后到期需要明确继续。", "Leave empty for a long-wait notice only; an explicit timeout pauses for consent."));
     section = group(this.t("会话处理", "Conversation handling"));
     const cleanupTitle = this.t("正常结束后的会话处理", "Conversation policy after verified completion");
     label(cleanupTitle, choice(cleanupTitle, [{value:"delete",label:this.t("删除", "Delete")}, {value:"archive",label:this.t("归档", "Archive")}, {value:"retain",label:this.t("保留", "Retain")}] as const, () => value.cleanup, cleanup => { commit({cleanup}); }));
@@ -229,7 +227,7 @@ export class BridgeUi {
       const name = active ? `${active.config.model.title} · ${active.config.model.mode}` : selected ? `${selected.title} · ${selected.mode}` : this.t("未选模型", "Choose model");
       const clock = (ms: number): string => `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
       const waiting = active?.state === "waiting" || active?.state === "paused";
-      button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)} / ${clock(active.allowedMs ?? 0)}` : ""}` : `${this.t("Chat 协作", "Chat collaboration")}: ${settings.enabled ? this.t("开", "on") : this.t("关", "off")}${settings.enabled ? ` · ${name} · ${selected?.effortLabel ?? "—"}` : ""}`;
+      button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)}${active.allowedMs == null ? "" : ` / ${clock(active.allowedMs)}`}` : ""}` : `${this.t("Chat 协作", "Chat collaboration")}: ${settings.enabled ? this.t("开", "on") : this.t("关", "off")}${settings.enabled ? ` · ${name} · ${selected?.effortLabel ?? "—"}` : ""}`;
       if (!active && settings.enabled && status?.connection) button.textContent = `${this.t("等待 Codex 接入", "Waiting for Codex to connect")} · ${name}`;
       if (this.blockedPreparation.has(key)) button.textContent = this.t("旧协作说明需重新准备", "Saved collaboration instructions need renewal");
       // Keep the user's explicit Pro choice visible even when model details truncate.
@@ -356,16 +354,17 @@ export class BridgeUi {
         // Session-bound controls must not outlive their owner or target a replacement session.
         if (current.active?.sessionId !== active?.sessionId) { close(); return; }
         if (current.active) {
-          if (stateNode) stateNode.textContent = `${this.stateLabel(current.active.state)} · ${current.active.usedRounds}/${current.active.maxRounds} · ${this.t("修改下次生效", "Changes apply next time")}`;
-          for (const [action, button] of consentButtons) button.hidden = action === "next-batch"
-            ? current.active.remainingRounds !== 0 || current.active.busy || current.active.turnId !== undefined
-            : current.active.state !== (action === "continue-waiting" ? "paused" : "needs-user");
-          lines.push(`${this.t("剩余轮数", "Remaining rounds")}: ${current.active.remainingRounds} · ${this.t("最终反馈计入预算", "Final feedback counts toward the budget")}`);
-          if (current.active.remainingRounds === 1) lines.push(this.t("建议将最后一轮留给最终验收。", "Reserve the last round for final verification."));
+          if (stateNode) stateNode.textContent = `${this.stateLabel(current.active.state)} · ${this.t("已发送请求", "Requests sent")}: ${current.active.usedRequests}`;
+          for (const [action, button] of consentButtons) button.hidden = action === "remove-request-limit"
+            ? current.active.maxRequests === null || current.active.busy || current.active.turnId !== undefined
+            : current.active.state !== "paused";
+          lines.push(current.active.remainingRequests === null ? this.t("自动推进到任务完成", "Working until task completion") : `${this.t("剩余请求", "Remaining requests")}: ${current.active.remainingRequests} · ${this.t("最终反馈计入上限", "Final feedback counts toward the limit")}`);
+          if (current.active.longWait && current.active.state === "waiting") lines.push(this.t("等待较久，尚未收到可验证回复；可以随时停止。", "Long wait: no verified reply yet. You can stop at any time."));
+          if (current.active.state === "needs-user") lines.push(this.t("请在当前任务中回答问题，Codex 会回传答案。", "Reply in the current task; Codex will return your answer."));
         }
         if (current.lastReply) {
           const { elapsedMs, repairCount, round } = current.lastReply;
-          lines.push(this.t(`最近回复：${(elapsedMs / 1000).toFixed(1)} 秒 · 格式修复 ${repairCount} 次 · 本批第 ${round} 轮`, `Last reply: ${(elapsedMs / 1000).toFixed(1)} s · ${repairCount} format repairs · batch round ${round}`));
+          lines.push(this.t(`最近回复：${(elapsedMs / 1000).toFixed(1)} 秒 · 格式修复 ${repairCount} 次 · 第 ${round} 次请求`, `Last reply: ${(elapsedMs / 1000).toFixed(1)} s · ${repairCount} format repairs · request ${round}`));
         }
         diagnostics.textContent = lines.join("\n"); diagnostics.hidden = lines.length === 0;
         position();
@@ -378,7 +377,7 @@ export class BridgeUi {
       pending.className = "bridge-quick-state"; pending.setAttribute("role", "status"); panel.append(pending);
     }
     if (active && !("draftId" in owner)) {
-      const state = this.node("p", `${this.stateLabel(active.state)} · ${active.usedRounds}/${active.maxRounds} · ${this.t("修改下次生效", "Changes apply next time")}`); state.className = "bridge-quick-state"; panel.append(state);
+      const state = this.node("p", `${this.stateLabel(active.state)} · ${this.t("已发送请求", "Requests sent")}: ${active.usedRequests}`); state.className = "bridge-quick-state"; panel.append(state);
       stateNode = state;
       for (const code of [active.cleanupReason, active.titleError]) if (code) {
         const detail=this.node("p",code); detail.className="bridge-quick-state"; detail.setAttribute("role","status"); panel.append(detail);
@@ -390,13 +389,12 @@ export class BridgeUi {
       const details = this.node("details"), actions = this.node("div"); actions.className = "bridge-actions";
       details.append(this.node("summary", this.t("管理当前协作", "Manage collaboration")), actions); panel.append(details);
       details.addEventListener("toggle", position);
-      const add = (label: string, action: "next-batch" | "continue-waiting" | "user-confirmed", available: boolean): void => {
+      const add = (label: string, action: "remove-request-limit" | "continue-waiting", available: boolean): void => {
         const button = this.button(label, () => { this.control.consent(owner, active.sessionId, action); close(); });
         button.hidden = !available; consentButtons.set(action, button); actions.append(button);
       };
-      add(this.t("允许下一批", "Allow next batch"), "next-batch", active.remainingRounds === 0 && !active.busy && active.turnId === undefined);
+      add(this.t("取消本次请求上限", "Remove this session's request limit"), "remove-request-limit", active.maxRequests !== null && !active.busy && active.turnId === undefined);
       add(this.t("继续等待", "Continue waiting"), "continue-waiting", active.state === "paused");
-      add(this.t("已提供所需确认", "Required confirmation provided"), "user-confirmed", active.state === "needs-user");
       for (const policy of ["retain", "archive", "delete"] as const) {
         const labels = {retain:this.t("结束并保留", "End and retain"),archive:this.t("结束并归档", "End and archive"),delete:this.t("结束并删除", "End and delete")};
         actions.append(this.button(labels[policy], async () => {
@@ -412,6 +410,14 @@ export class BridgeUi {
           } finally { for (const button of actions.querySelectorAll("button")) button.disabled = false; }
         }));
       }
+    }
+    if (!("draftId" in owner)) for (const cleanup of this.control.status({task:owner}).pendingCleanup) {
+      const box = this.node("div"); box.className = "bridge-quick-state";
+      box.append(this.node("p", this.t("任务已完成，Chat 清理待处理", "Task completed; Chat cleanup pending") + ` · ${cleanup.reason ?? "CLEANUP_FAILED"}`));
+      for (const policy of [cleanup.policy, "retain"] as const) box.append(this.button(policy === "retain" ? this.t("保留 Chat", "Retain Chat") : this.t("重试清理", "Retry cleanup"), async () => {
+        await this.control.finish({task:owner,sessionId:cleanup.sessionId,policy}); close();
+      }));
+      panel.append(box);
     }
     const error = this.node("p", this.lastError ?? ""); error.dataset.bridgeError = "true"; error.className = "bridge-quick-state"; error.setAttribute("role", "status"); panel.append(error);
     position();

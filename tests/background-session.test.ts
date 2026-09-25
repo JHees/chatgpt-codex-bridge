@@ -11,7 +11,7 @@ function fixture() {
   const config = new ChatConfiguration();
   config.updateCatalog({ options: [{ slug: "planner", lane: "pro", modelTitle: "Planner", selectedLabel: "Pro" }] });
   const task = { hostId: "local", taskId: "task" };
-  config.updateTask(task, { enabled: true, modelKey: config.models()[0]!.key });
+  config.updateTask(task, { enabled: true, modelKey: config.models()[0]!.key, maxRequests: 3, replyTimeoutMinutes: 15 });
   const port: BackgroundChatPort = {
     check: async () => {},
     send: async input => { sent.push(input.text); return `message-${sent.length}`; },
@@ -90,28 +90,28 @@ it("repairs an invalid legacy reply by requesting one readable status and the or
 it("exposes a recoverable repair state and reads the same repaired turn without resending business work", async () => {
   const f = fixture(); f.raw("not a protocol block");
   expect((await f.session.exchange(f.request)).state).toBe("repair-required");
-  expect(f.session.status()).toMatchObject({state:"repair-required",busy:false,usedRounds:1,repair:"required"});
+  expect(f.session.status()).toMatchObject({state:"repair-required",busy:false,usedRequests:1,repair:"required"});
   f.reply();
   expect((await f.session.exchange(f.request)).state).toBe("response");
   expect(f.sent).toHaveLength(2);
-  expect(f.session.status()).toMatchObject({state:"actions-returned",usedRounds:1});
+  expect(f.session.status()).toMatchObject({state:"actions-returned",usedRequests:1});
   expect(f.session.status()).toMatchObject({ lastReply: { elapsedMs: 180_000, repairCount: 1, round: 1 } });
   expect((await f.session.exchange(f.request)).state).toBe("already-delivered");
   expect(f.sent).toHaveLength(2);
 });
 
-it("enforces batch budget without counting reads and allows another batch only through explicit consent", async () => {
+it("enforces a total request limit without counting reads and removes it only through explicit consent", async () => {
   const f = fixture();
   for (let i = 1; i <= 3; i++) {
     f.reply(`turn-${i}`);
     await f.session.exchange({ ...f.request, turnId: `turn-${i}`, ...(i === 1 ? {} : { kind: "result", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Checked", evidence: ["Verified source"] }] }) }, i === 1 ? undefined : `turn-${i - 1}`);
-    expect(f.session.status()).toMatchObject({ remainingRounds: 3 - i, lastReply: { round: i, repairCount: 0 } });
+    expect(f.session.status()).toMatchObject({ remainingRequests: 3 - i, lastReply: { round: i, repairCount: 0 } });
   }
   const next = { ...f.request, turnId: "turn-4", kind: "result", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Checked", evidence: ["Verified source"] }] };
   await expect(f.session.exchange(next, "turn-3")).rejects.toMatchObject({ code: "BUDGET_EXHAUSTED" });
   expect(f.sent).toHaveLength(3);
-  f.session.allowNextBatch();
-  expect(f.session.status()).toMatchObject({ remainingRounds: 3 });
+  f.session.removeRequestLimit();
+  expect(f.session.status()).toMatchObject({ remainingRequests: null, usedRequests: 3 });
   f.reply("turn-4");
   expect((await f.session.exchange(next, "turn-3")).state).toBe("response");
 });

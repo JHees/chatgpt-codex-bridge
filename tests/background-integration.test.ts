@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { AppChatBackgroundAdapter, type NativeCompletionInput } from "../packages/renderer-plugin/src/background-adapter.js";
 import type { AppChatClient } from "../packages/renderer-plugin/src/app-chat-runtime.js";
 import { ChatConfiguration } from "../packages/renderer-plugin/src/chat-configuration.js";
@@ -27,7 +27,7 @@ it.each(["manual-message", "regeneration", "changed-branch", "unchanged"])("reva
   const configuration = new ChatConfiguration();
   configuration.updateCatalog({ options: [{ slug: "planner", lane: "thinking", modelTitle: "Planner", selectedLabel: "Medium", thinkingEffort: "standard" }] });
   const task = { hostId: "local", taskId: "task" };
-  configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, totalWaitMinutes: 1 });
+  configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, replyTimeoutMinutes: 1 });
   const controller = new CooperationController(configuration, () => ({ state: "accepted", bindingId: "binding", ...task, turnId: "native-turn" }), () => new AppChatBackgroundAdapter(client, () => true), () => now);
   const config = controller.prepare(task, "snapshot"); controller.register("binding", task, config);
   const payload = { task, bindingId: "binding", snapshotId: config.id, request: { protocol: PROTOCOL, sessionId: "session", turnId: "turn", kind: "request", objective: "Inspect a document", state: { phase: "plan", summary: "Ready", completed: [], blockers: [] }, message: "Choose the first check", actionResults: [] } };
@@ -48,4 +48,50 @@ it.each(["manual-message", "regeneration", "changed-branch", "unchanged"])("reva
     }
     expect(sends).toBe(1);
   } finally { controller.stop(); }
+});
+
+it.each([null, 1])("continues a slow native startup on the identical business turn with deadline %s", async replyTimeoutMinutes => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  let controller: CooperationController | undefined;
+  try {
+    let sends = 0, current = "root";
+    const mapping: Record<string, unknown> = {};
+    const client: AppChatClient = {
+      models: async () => ({}), delete: async () => {},
+      getConversationStreamStatus: async () => ({ status: "COMPLETE" }),
+      get: async () => ({ current_node: current, mapping }),
+      startCompletionStream: input => {
+        sends++;
+        const native = input as NativeCompletionInput, user = native.request.messages[0]!;
+        setTimeout(() => {
+          native.onRequestStart();
+          mapping[user.id] = { parent: "root", message: user };
+          current = "reply";
+          mapping.reply = { parent: user.id, message: { id: "reply", author: { role: "assistant" }, end_turn: true, content: { parts: ["Bridge status: continue\nInspect the fixture and report evidence."] } } };
+          native.onUpdate({ conversationId: "owned", type: "message", message: { id: "reply" } });
+          native.onComplete({ reason: "done" });
+        }, 110_000);
+        return new Promise(() => {});
+      },
+    };
+    const configuration = new ChatConfiguration(), task = { hostId: "local", taskId: "task" };
+    configuration.updateCatalog({ options: [{ slug: "planner", lane: "thinking", modelTitle: "Planner", selectedLabel: "High", thinkingEffort: "extended" }] });
+    configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, replyTimeoutMinutes });
+    controller = new CooperationController(configuration, () => ({ state: "accepted", bindingId: "binding", ...task, turnId: "native-turn" }), () => new AppChatBackgroundAdapter(client, () => true));
+    const config = controller.prepare(task, "snapshot"); controller.register("binding", task, config);
+    const payload = { task, bindingId: "binding", snapshotId: config.id, request: { protocol: PROTOCOL, sessionId: "session", turnId: "turn", kind: "request", objective: "Inspect the fixture", state: { phase: "plan", summary: "Ready", completed: [], blockers: [] }, message: "Choose the check", actionResults: [] } };
+    const first = controller.exchange(payload).then(result => ({ result }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(await first).toMatchObject({ result: { state: replyTimeoutMinutes === null ? "waiting" : "paused" } });
+    const second = controller.exchange(payload);
+    await vi.advanceTimersByTimeAsync(10_000);
+    if (replyTimeoutMinutes === null) expect(await second).toMatchObject({ state: "response", response: { status: "continue" } });
+    else {
+      expect(await second).toMatchObject({ state: "paused" });
+      controller.consent(task, "session", "continue-waiting");
+      expect(await controller.exchange(payload)).toMatchObject({ state: "response", response: { status: "continue" } });
+    }
+    expect(controller.status({ task }).active).toMatchObject({ usedRequests: 1, errorCode: null });
+    expect(sends).toBe(1);
+  } finally { controller?.stop(); vi.useRealTimers(); }
 });

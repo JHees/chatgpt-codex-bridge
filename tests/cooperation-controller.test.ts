@@ -83,14 +83,14 @@ it("distinguishes a malformed local request from an invalid Chat reply before to
 
 it("freezes the visible preparation and never binds an unrelated task during navigation", async () => {
   const f = fixture();
-  f.config.updateTask(f.task, { totalWaitMinutes: 1, maxRounds: 1 });
+  f.config.updateTask(f.task, { replyTimeoutMinutes: 1, maxRequests: 1 });
   f.accept();
   await expect(f.controller.exchange({ ...f.payload, task: { hostId: "local", taskId: "task-b" } })).rejects.toMatchObject({ code: "TASK_MISMATCH" });
   await f.controller.exchange(f.payload);
   const state = f.controller.status({ task: f.task, bindingId: "binding-a" });
-  expect(state.active?.config.settings.totalWaitMinutes).toBe(15);
-  expect(state.active?.config.settings.maxRounds).toBe(3);
-  expect(state.nextSettings.totalWaitMinutes).toBe(1);
+  expect(state.active?.config.settings.replyTimeoutMinutes).toBeNull();
+  expect(state.active?.config.settings.maxRequests).toBeNull();
+  expect(state.nextSettings.replyTimeoutMinutes).toBe(1);
   expect(f.controller.status({ task: { hostId: "local", taskId: "task-b" } }).active).toBeNull();
 });
 
@@ -119,12 +119,12 @@ it("preserves a new task's explicit override when its accepted draft is promoted
   f.config.updateTask(draft, { enabled: true, modelKey: f.config.models()[0]!.key });
   const snapshot = f.controller.prepare(draft, "snapshot-draft");
   f.controller.register("binding-draft", draft, snapshot);
-  f.config.updateTask(task, { enabled: false, maxRounds: 1 });
+  f.config.updateTask(task, { enabled: false, maxRequests: 1 });
   f.receipt({ state: "accepted", bindingId: "binding-draft", ...task, turnId: "native-new-turn" });
   const payload = { ...f.payload, task, bindingId: "binding-draft", snapshotId: snapshot.id };
   await expect(f.controller.exchange(payload)).rejects.toMatchObject({ code: "COLLABORATION_DISABLED" });
   expect(f.sends).toHaveLength(0);
-  expect(f.config.task(task).maxRounds).toBe(1);
+  expect(f.config.task(task).maxRequests).toBe(1);
 });
 
 it("promotes a confirmed draft after the formal task was only read, not explicitly changed", async () => {
@@ -170,7 +170,7 @@ it("preserves the final reply and cleanup reason when automatic cleanup fails; e
   f.port.finish=async()=>{throw Object.assign(new Error("private details"),{code:"CLEANUP_PENDING"});};
   const result=await f.controller.exchange({...f.payload,request:{...f.payload.request,state:{phase:"complete",summary:"Verified",completed:["Test passed"],blockers:[]}}});
   expect(result).toMatchObject({state:"response",response:{status:"complete"}});
-  expect(f.controller.status({task:f.task}).active).toMatchObject({state:"cleanup-failed",errorCode:"CLEANUP_FAILED"});
+  expect(f.controller.status({task:f.task})).toMatchObject({active:null,pendingCleanup:[{sessionId:"session-a"}]});
   f.port.finish=async()=>{};
   await expect(f.controller.finish({task:f.task,sessionId:"session-a",policy:"delete"})).resolves.toMatchObject({state:"ended"});
 });

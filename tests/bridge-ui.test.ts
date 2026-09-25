@@ -208,7 +208,7 @@ it("registers one settings page and an off task control without sending or prepa
   expect(f.writes).toHaveLength(0);
 });
 
-it("updates remaining rounds and reply diagnostics in the open task panel through completion", async () => {
+it("keeps working without batches and updates reply diagnostics through final verification", async () => {
   vi.useFakeTimers();
   let source = "Bridge status: continue\nInspect the source";
   const port: BackgroundChatPort = { check: async () => {}, send: async () => "message", read: async () => ({state:"complete",text:source}), finish: async () => {} };
@@ -220,20 +220,16 @@ it("updates remaining rounds and reply diagnostics in the open task panel throug
   await f.controller.exchange(call);
   f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
   const panel = f.document.querySelector(".bridge-popover")!;
-  expect(panel.textContent).toContain("Remaining rounds: 2");
-  expect(panel.textContent).toContain("Final feedback counts toward the budget");
-  expect([...panel.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Allow next batch")?.hidden).toBe(true);
+  expect(panel.textContent).toContain("Working until task completion");
+  expect(panel.textContent).not.toContain("Allow next batch");
+  expect(panel.textContent).not.toContain("Required confirmation provided");
   for (let i=2;i<=3;i++) {
     await f.controller.exchange({...call,replyToTurnId:`turn-${i-1}`,request:{...request,turnId:`turn-${i}`,kind:"result",actionResults:[{actionId:"plan",outcome:"succeeded",summary:"Checked",evidence:["Verified"]}]}});
     await vi.advanceTimersByTimeAsync(1000);
-    expect(panel.textContent).toContain(`Remaining rounds: ${3-i}`);
-    if (i===2) expect(panel.textContent).toContain("Reserve the last round for final verification");
-    expect(panel.textContent).toContain(`round ${i}`);
-    expect(panel.textContent).toContain(`${i}/3`);
+    expect(panel.textContent).toContain(`request ${i}`);
+    expect(panel.textContent).toContain(`Requests sent: ${i}`);
   }
-  expect(f.controller.status({task}).active?.usedRounds).toBe(3);
-  expect([...panel.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Allow next batch")?.hidden).toBe(false);
-  f.controller.consent(task,"session","next-batch");
+  expect(f.controller.status({task}).active?.usedRequests).toBe(3);
   source = "Bridge status: complete\nEvidence reviewed";
   await f.controller.exchange({...call,replyToTurnId:"turn-3",request:{...request,turnId:"turn-4",kind:"result",state:{phase:"complete",summary:"Verified",completed:["Passed"],blockers:[]},actionResults:[{actionId:"plan",outcome:"succeeded",summary:"Checked",evidence:["Verified"]}]}});
   await vi.advanceTimersByTimeAsync(1000);
@@ -259,7 +255,7 @@ it("releases the task-panel polling interval on close and stop", async () => {
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("uses whole-trigger menus for read window and cleanup, saving archive without a native select", async () => {
+it("keeps cleanup choices while exposing only optional user limits", async () => {
   const f = fixture();
   expect(f.settings.querySelector("select")).toBeNull();
   const trigger = f.settings.querySelector<HTMLButtonElement>('[aria-label="Conversation policy after verified completion"]')!;
@@ -269,12 +265,8 @@ it("uses whole-trigger menus for read window and cleanup, saving archive without
   expect(f.configuration.defaults().cleanup).toBe("archive");
   expect(trigger.textContent).toBe("Archive");
   expect(f.writes).toHaveLength(1);
-  const window = f.settings.querySelector<HTMLButtonElement>('[aria-label="Read window"]')!;
-  window.click(); await Promise.resolve(); await Promise.resolve();
-  const item = [...f.document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(row=>row.textContent==="30 s")!;
-  item.click(); await Promise.resolve(); await Promise.resolve();
-  expect(f.configuration.defaults().readWindowSeconds).toBe(30);
-  expect(f.document.activeElement).toBe(window);
+  expect(f.settings.querySelector('[aria-label="Read window"]')).toBeNull();
+  expect([...f.settings.querySelectorAll<HTMLInputElement>('input[type="number"]')].every(input=>input.value==="")).toBe(true);
 });
 
 it("shows accepted instructions as waiting for Codex, not an active Chat session", async () => {
@@ -431,10 +423,10 @@ it("puts explicit Pro mode before truncatable model details on the compact contr
 it("does not persist invalid default values before validating them", () => {
   const f = fixture();
   const rounds = f.settings.querySelector<HTMLInputElement>('input[type="number"]')!;
-  rounds.value = "99"; f.fire(rounds, "change");
+  rounds.value = "0"; f.fire(rounds, "change");
   f.fire(f.settings.querySelector("form")!, "submit");
   expect(f.writes).toHaveLength(0);
-  expect(f.configuration.defaults().maxRounds).toBe(3);
+  expect(f.configuration.defaults().maxRequests).toBeNull();
 });
 
 it("automatically persists a selected default model without a Save button", async () => {
@@ -456,16 +448,17 @@ it("autosaves each valid field, ignores duplicates and keeps existing task choic
   const rounds = f.settings.querySelector<HTMLInputElement>('input[type="number"]')!;
   rounds.value = "5"; f.fire(rounds,"input"); f.fire(rounds,"change");
   expect(f.writes).toHaveLength(2);
-  expect(f.configuration.defaults()).toMatchObject({enabled:true,maxRounds:5});
+  expect(f.configuration.defaults()).toMatchObject({enabled:true,maxRequests:5});
   expect(f.configuration.task({hostId:"local",taskId:"task-a"})).toEqual(before);
-    expect(f.configuration.task({draftId:"new-draft"})).toMatchObject({enabled:true,maxRounds:5});
-    expect(f.configuration.task({hostId:"local",taskId:"unrecorded-existing-task"})).toMatchObject({enabled:false,maxRounds:5});
+    expect(f.configuration.task({draftId:"new-draft"})).toMatchObject({enabled:true,maxRequests:5});
+    expect(f.configuration.task({hostId:"local",taskId:"unrecorded-existing-task"})).toMatchObject({enabled:false,maxRequests:5});
   rounds.value = ""; f.fire(rounds,"input");
-  expect(f.writes).toHaveLength(2);
-  expect(rounds.getAttribute("aria-invalid")).toBe("true");
+  expect(f.writes).toHaveLength(3);
+  expect(f.configuration.defaults().maxRequests).toBeNull();
+  expect(rounds.getAttribute("aria-invalid")).toBeNull();
   rounds.value = "6"; f.fire(rounds,"input");
   expect(rounds.getAttribute("aria-invalid")).toBeNull();
-  expect(f.configuration.defaults().maxRounds).toBe(6);
+  expect(f.configuration.defaults().maxRequests).toBe(6);
 });
 
 it("reports failed autosave without changing defaults and permits the next valid edit", () => {
@@ -473,11 +466,11 @@ it("reports failed autosave without changing defaults and permits the next valid
   f.api.storage.set = () => { throw Error("private failure detail"); };
   const rounds = f.settings.querySelector<HTMLInputElement>('input[type="number"]')!;
   rounds.value = "4"; f.fire(rounds,"input");
-  expect(f.configuration.defaults().maxRounds).toBe(3);
+  expect(f.configuration.defaults().maxRequests).toBeNull();
   expect(f.settings.textContent).toContain("Not saved");
   expect(f.settings.textContent).not.toContain("private failure detail");
   f.api.storage.set = write; f.fire(rounds,"change");
-  expect(f.configuration.defaults().maxRounds).toBe(4);
+  expect(f.configuration.defaults().maxRequests).toBe(4);
 });
 
 it("offers a compact Diagnose action in a native settings row without generating messages", async () => {

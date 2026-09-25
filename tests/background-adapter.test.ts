@@ -254,3 +254,60 @@ it("releases a slow final-state read and its timer when the plugin instance stop
     await rejected;
   } finally { vi.useRealTimers(); }
 });
+
+it("keeps one native request alive past the startup window and reads its late completion", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    let native!: NativeCompletionInput, sends = 0;
+    const client: AppChatClient = {
+      models: async () => ({}), delete: async () => {},
+      getConversationStreamStatus: async () => ({ status: "COMPLETE" }),
+      get: async () => ({ current_node: "reply", mapping: {
+        user: { message: { id: "user", author: { role: "user" }, content: { parts: ["Request"] } } },
+        reply: { parent: "user", message: { id: "reply", author: { role: "assistant" }, end_turn: true, content: { parts: ["Response"] } } },
+      } }),
+      startCompletionStream: input => { sends++; native = input as NativeCompletionInput; return new Promise(() => {}); },
+    };
+    const adapter = new AppChatBackgroundAdapter(client, () => true, () => "user");
+    const sending = adapter.send({ text: "Request", model: { key: "m", slug: "planner", mode: "thinking", title: "Planner", effort: "extended", effortLabel: "High" } });
+    const sent = sending.then(id => ({ id }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await sent).toEqual({ id: "user" });
+    const first = adapter.read("user", 1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await first).toEqual({ state: "waiting" });
+    const later = adapter.read("user", 90_000);
+    native.onRequestStart();
+    native.onUpdate({ conversationId: "owned", type: "message", message: { id: "reply" } });
+    native.onComplete({ reason: "done" });
+    expect(await later).toEqual({ state: "complete", text: "Response" });
+    expect(sends).toBe(1);
+    await adapter.finish("retain");
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(["reject", "error"])("keeps a real late native %s terminal without resending", async mode => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    let native!: NativeCompletionInput, reject!: (error: Error) => void, sends = 0;
+    const client: AppChatClient = {
+      models: async () => ({}), get: async () => ({}), delete: async () => {}, getConversationStreamStatus: async () => ({}),
+      startCompletionStream: input => { sends++; native = input as NativeCompletionInput; return new Promise((_, fail) => { reject = fail; }); },
+    };
+    const adapter = new AppChatBackgroundAdapter(client, () => true, () => "user");
+    const sending = adapter.send({ text: "Request", model: { key: "m", slug: "planner", mode: "thinking", title: "Planner", effort: "extended", effortLabel: "High" } });
+    const sent = sending.then(id => ({ id }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(10_000); expect(await sent).toEqual({ id: "user" });
+    const reading = adapter.read("user", 90_000);
+    const code = mode === "reject" ? "SEND_UNCERTAIN" : "CHAT_RATE_LIMITED";
+    const failure = expect(reading).rejects.toMatchObject({ code });
+    if (mode === "reject") reject(Error("Private native details must not be returned"));
+    else native.onError({ responseStatus: 429 });
+    await failure;
+    await expect(adapter.send({ text: "No retry", model: { key: "m", slug: "planner", mode: "thinking", title: "Planner", effort: "extended", effortLabel: "High" } })).rejects.toMatchObject({ code });
+    expect(sends).toBe(1);
+    await adapter.finish("retain");
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});

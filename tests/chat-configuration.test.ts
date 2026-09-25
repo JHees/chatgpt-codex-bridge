@@ -16,11 +16,11 @@ it("persists task choices, not active sessions; only drafts inherit enabled defa
   expect(config.task(old).enabled).toBe(false);
   expect(config.task(draft).enabled).toBe(true);
   config.promote(draft, task);
-  config.updateTask(old, { enabled: true, maxRounds: 5 });
+  config.updateTask(old, { enabled: true, maxRequests: 5 });
   config.resetTasks();
-  const reloaded = new ChatConfiguration({ ...defaults, enabled: false, maxRounds: 8 }, store);
-  expect(reloaded.task(old)).toMatchObject({ enabled: true, maxRounds: 5 });
-  expect(reloaded.task(task)).toMatchObject({ enabled: true, maxRounds: 3 });
+  const reloaded = new ChatConfiguration({ ...defaults, enabled: false, maxRequests: 8 }, store);
+  expect(reloaded.task(old)).toMatchObject({ enabled: true, maxRequests: 5 });
+  expect(reloaded.task(task)).toMatchObject({ enabled: true, maxRequests: null });
   reloaded.updateTask(old, { enabled: false });
   expect(new ChatConfiguration(defaults, store).task(old).enabled).toBe(false);
   expect(new ChatConfiguration(defaults, store).task({ ...old, hostId: "remote" }).enabled).toBe(false);
@@ -38,13 +38,13 @@ it("does not accept a task preference change when storage fails", () => {
 
 it("has no implicit selected model and freezes the explicitly selected Pro option without an effort", () => {
   const config = new ChatConfiguration();
-  expect(config.defaults()).toEqual({ enabled: false, modelKey: null, maxRounds: 3, readWindowSeconds: 90, totalWaitMinutes: 15, cleanup: "delete" });
+  expect(config.defaults()).toEqual({ enabled: false, modelKey: null, maxRequests: null, replyTimeoutMinutes: null, cleanup: "delete" });
   config.updateCatalog(catalog);
   const pro = config.models().find(model => model.mode === "pro")!;
   config.updateTask({ hostId: "local", taskId: "a" }, { enabled: true, modelKey: pro.key });
   const frozen = config.freeze({ hostId: "local", taskId: "a" }, "snapshot-1");
   expect(frozen.model).toMatchObject({ slug: "research-example", mode: "pro", effort: null });
-  expect(frozen.settings.totalWaitMinutes).toBe(15);
+  expect(frozen.settings.replyTimeoutMinutes).toBeNull();
   expect(config.task({ hostId: "local", taskId: "b" }).enabled).toBe(false);
 });
 
@@ -52,8 +52,8 @@ it("rejects coercible values, unknown fields and out-of-range wait or batch limi
   const config = new ChatConfiguration();
   for (const patch of [
     { cleanup: ["delete"] }, { cleanup: { toString: () => "retain" } },
-    { readWindowSeconds: "90" }, { maxRounds: 0 }, { maxRounds: 9 },
-    { totalWaitMinutes: 0 }, { totalWaitMinutes: 61 }, { hidden: true },
+    { readWindowSeconds: "90" }, { maxRequests: 0 }, { maxRequests: 1.5 },
+    { replyTimeoutMinutes: 0 }, { replyTimeoutMinutes: Infinity }, { hidden: true },
   ]) expect(() => config.saveDefaults({ ...config.defaults(), ...patch })).toThrowError();
   expect(config.defaults().cleanup).toBe("delete");
 });
@@ -65,11 +65,11 @@ it("keeps existing tasks and frozen sessions independent from new defaults and c
   const model = config.models()[0]!;
   config.updateTask(task, { enabled: true, modelKey: model.key });
   const snapshot = config.freeze(task, "s1");
-  config.saveDefaults({ ...config.defaults(), maxRounds: 8 });
-  config.updateTask(task, { maxRounds: 1 });
-  expect(snapshot.settings.maxRounds).toBe(3);
-  expect(config.task(task).maxRounds).toBe(1);
-  expect(config.task({ ...task, hostId: "remote" }).maxRounds).toBe(8);
+  config.saveDefaults({ ...config.defaults(), maxRequests: 8 });
+  config.updateTask(task, { maxRequests: 1 });
+  expect(snapshot.settings.maxRequests).toBeNull();
+  expect(config.task(task).maxRequests).toBe(1);
+  expect(config.task({ ...task, hostId: "remote" }).maxRequests).toBe(8);
   const copy = config.task(task);
   copy.enabled = false;
   expect(config.task(task).enabled).toBe(true);

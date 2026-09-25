@@ -19,7 +19,7 @@ it.skipIf(process.platform !== "win32")("waits through short windows and repair,
   const command = `
     $ErrorActionPreference='Stop'
     . ${quote(runner)}
-    foreach ($states in @(@('waiting','repair-required','waiting','response'), @('waiting','paused'), @('error'), @('already-delivered'))) {
+    foreach ($states in @(@('waiting','repair-required','response'), @('waiting','paused'), @('error'), @('already-delivered'), @('waiting','waiting','waiting'))) {
       $queue=[Collections.Generic.Queue[string]]::new(); foreach($state in $states){$queue.Enqueue($state)}
       $result=Invoke-BridgeTurn { $state=$queue.Dequeue(); @{version=1;requestId='test';ok=($state -ne 'error');result=@{state=$state};error=@{code='PROTOCOL_INVALID'}} | ConvertTo-Json -Depth 8 -Compress }
       if($queue.Count -ne 0){throw 'Did not complete expected sequence'}
@@ -32,7 +32,8 @@ it.skipIf(process.platform !== "win32")("waits through short windows and repair,
   expect(result.status).toBe(0);
   const lines=result.stdout.trim().split(/\r?\n/u);
   expect(lines.slice(0,4).map(line=>JSON.parse(line).result.state)).toEqual(["response","paused","error","already-delivered"]);
-  expect(lines[4]).toBe("TRANSPORT_STOPPED");
+  expect(JSON.parse(lines[4]!).result.state).toBe("waiting");
+  expect(lines[5]).toBe("TRANSPORT_STOPPED");
 });
 it.skipIf(process.platform !== "win32")("supports direct, same-shell pipeline and explicit process stdin without guessing transport", () => {
   const directory = mkdtempSync(join(tmpdir(), "bridge-helper-"));

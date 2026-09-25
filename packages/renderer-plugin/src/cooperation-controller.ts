@@ -28,6 +28,7 @@ function sameTask(a: TaskIdentity, b: TaskIdentity): boolean { return a.hostId =
 export class CooperationController {
   private readonly bindings = new Map<string, Binding>();
   private active: { bindingId: string; session: BackgroundSession } | undefined;
+  private readonly pendingCleanup = new Map<string, { bindingId: string; session: BackgroundSession; policy: CleanupPolicy }>();
   // One bounded readback receipt survives automatic disposal, not a conversation journal.
   private completed: { task: TaskIdentity; sessionId: string; bindingId: string; turnId?: string; result?: BackgroundResult; policy: CleanupPolicy; lastReply: ReplyDiagnostics | null } | undefined;
   private stopped = false;
@@ -72,7 +73,8 @@ export class CooperationController {
       } else {
         const target = this.owned(task, id(read.sessionId));
         if (!bindingId || target.bindingId !== bindingId) throw new BridgeError("SESSION_MISMATCH", "Readback must use the original submission binding.");
-        turn = target.session.readTurn(id(read.turnId));
+        const final = target.session.completedReply();
+        turn = final && final.turnId === read.turnId ? final.result : target.session.readTurn(id(read.turnId));
       }
     }
     // Never expose another task's configuration or native receipt.
@@ -91,6 +93,8 @@ export class CooperationController {
       active: owned && activeState && !turn ? { sessionId: active.id, config: active.config, ...activeState } : null,
       lastReply: lastReply ? { ...lastReply } : null,
       occupied: !!active && !owned,
+      pendingCleanup: [...this.pendingCleanup].filter(([, entry]) => sameTask(task, entry.session.config.task))
+        .map(([sessionId, entry]) => ({ sessionId, policy: entry.policy, reason: entry.session.status().cleanupReason })),
       // Readback carries a bounded reply instead of duplicating configuration/catalog data.
       models: turn ? [] : this.configuration.models(),
     };
@@ -116,7 +120,7 @@ export class CooperationController {
       if (!sameTask(task, this.active.session.config.task)) throw new BridgeError("SESSION_OCCUPIED", "Another task owns the single active collaboration.");
       if (this.active.bindingId !== bindingId || this.active.session.id !== request.sessionId) throw new BridgeError("SESSION_MISMATCH", "Finish the current collaboration before starting another.");
     } else {
-      if (this.completed?.sessionId === request.sessionId) throw new BridgeError("SESSION_MISMATCH", "Use a fresh identity for a new collaboration; read back the completed session instead.");
+      if (this.completed?.sessionId === request.sessionId || this.pendingCleanup.has(request.sessionId)) throw new BridgeError("SESSION_MISMATCH", "Use a fresh identity for a new collaboration; read back the completed session instead.");
       const enabled = this.configuration.task(binding.owner).enabled;
       if (!enabled) throw new BridgeError("COLLABORATION_DISABLED", "Collaboration was disabled after preparation.");
       const current = this.configuration.models().find(model => model.key === binding.config.model.key);
@@ -151,7 +155,7 @@ export class CooperationController {
     // This declares intent, not authorization: the executor must have the user's request.
     explicitUserEnd ||= input.reason === "user-request";
     if (!isCleanupPolicy(input.policy)) throw new BridgeError("INVALID_REQUEST", "Choose delete, archive or retain explicitly.");
-    if (this.completed && sameTask(identity(input.task),this.completed.task) && id(input.sessionId) === this.completed.sessionId) {
+    if (this.completed && !this.pendingCleanup.has(id(input.sessionId)) && sameTask(identity(input.task),this.completed.task) && id(input.sessionId) === this.completed.sessionId) {
       if (input.policy !== this.completed.policy) throw new BridgeError("SESSION_LOST", "An ended conversation cannot change its cleanup policy.");
       return {state:"ended",policy:this.completed.policy};
     }
@@ -159,8 +163,20 @@ export class CooperationController {
     if (input.policy !== "retain" && !explicitUserEnd && !active.session.hasCompletedReport()) throw new BridgeError("COMPLETION_UNVERIFIED", "Report verified completion before automatic cleanup, or end in response to an explicit user request.");
     const completed = active.session.completedReply();
     const lastReply = active.session.status().lastReply;
-    await active.session.finish(input.policy);
-    this.completed = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy,lastReply};
+    const receipt = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy,lastReply};
+    try { await active.session.finish(input.policy); this.check(); }
+    catch (error) {
+      if (completed && !this.stopped) {
+        // Business verification is complete. Keep the exact cleanup target separately.
+        if (!this.pendingCleanup.has(active.session.id)) this.pendingCleanup.set(active.session.id, { ...active, policy: input.policy });
+        if (this.active === active) this.completed = receipt;
+        const binding = this.bindings.get(active.bindingId); if (binding) binding.ended = true;
+        if (this.active === active) this.active = undefined;
+      }
+      throw error;
+    }
+    const wasPending = this.pendingCleanup.delete(active.session.id);
+    if (!wasPending || this.completed?.sessionId === active.session.id) this.completed = receipt;
     const binding = this.bindings.get(active.bindingId);
     if (binding) binding.ended = true;
     if (this.active === active) this.active = undefined;
@@ -168,25 +184,28 @@ export class CooperationController {
   }
 
   /** These grants are intentionally absent from the host-command payloads. */
-  consent(task: TaskIdentity, sessionId: string, action: "next-batch" | "continue-waiting" | "user-confirmed"): void {
+  consent(task: TaskIdentity, sessionId: string, action: "remove-request-limit" | "continue-waiting"): void {
     this.check();
     const { session } = this.owned(task, sessionId);
-    if (action === "next-batch") session.allowNextBatch();
+    if (action === "remove-request-limit") session.removeRequestLimit();
     else if (action === "continue-waiting") session.continueWaiting();
-    else if (action === "user-confirmed") session.confirmUser();
     else throw new BridgeError("INVALID_REQUEST", "Unknown consent action.");
   }
   setEnabled(owner: ComposerIdentity, enabled: boolean): void {
     this.configuration.updateTask(owner, { enabled });
     if (!("draftId" in owner) && this.active && sameTask(owner, this.active.session.config.task)) this.active.session.setEnabled(enabled);
   }
-  stop(): void { this.stopped = true; this.active?.session.stop(); this.active = undefined; this.completed = undefined; this.bindings.clear(); this.configuration.resetTasks(); }
+  stop(): void {
+    this.stopped = true; this.active?.session.stop();
+    for (const entry of this.pendingCleanup.values()) entry.session.stop();
+    this.pendingCleanup.clear(); this.active = undefined; this.completed = undefined; this.bindings.clear(); this.configuration.resetTasks();
+  }
 
   private owned(task: TaskIdentity, sessionId: string) {
-    if (!this.active) throw new BridgeError("SESSION_LOST", "No active collaboration exists in this plugin instance.");
-    if (!sameTask(task, this.active.session.config.task)) throw new BridgeError("TASK_MISMATCH", "This task does not own the active collaboration.");
-    if (this.active.session.id !== sessionId) throw new BridgeError("SESSION_MISMATCH", "This session identity does not match.");
-    return this.active;
+    const target = this.active?.session.id === sessionId ? this.active : this.pendingCleanup.get(sessionId);
+    if (!target) throw new BridgeError(this.active ? "SESSION_MISMATCH" : "SESSION_LOST", "No owned collaboration matches this identity.");
+    if (!sameTask(task, target.session.config.task)) throw new BridgeError("TASK_MISMATCH", "This task does not own the collaboration.");
+    return target;
   }
   private acceptedReceipt(bindingId: string, task: TaskIdentity, strict: boolean) {
     const value = object(this.receipt(bindingId));

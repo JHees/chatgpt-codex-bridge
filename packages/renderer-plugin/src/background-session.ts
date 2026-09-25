@@ -15,7 +15,7 @@ export interface BackgroundChatPort {
 interface Turn {
   json: string;
   startedAt: number;
-  deadline: number;
+  deadline: number | null;
   messageId?: string;
   response?: BridgeResponse;
   paused: boolean;
@@ -24,7 +24,7 @@ interface Turn {
   accounted?: boolean;
 }
 export type BackgroundResult =
-  | { state: "waiting" | "paused"; turnId: string; elapsedMs: number; allowedMs: number }
+  | { state: "waiting" | "paused"; turnId: string; elapsedMs: number; allowedMs: number | null; longWait: boolean }
   | { state: "response"; response: BridgeResponse }
   | { state: "already-delivered" | "repair-required"; turnId: string };
 
@@ -41,7 +41,7 @@ export class BackgroundSession {
   private used = 0;
   private last: string | undefined;
   private lastReply: ReplyDiagnostics | null = null;
-  private awaitingUser = false;
+  private requestLimit: number | null;
   private cleanupFailed = false;
   private cleanupReason: string | null = null;
   private completedReport = false;
@@ -50,7 +50,7 @@ export class BackgroundSession {
   private readAbort: AbortController | undefined;
   private finishing: { policy: CleanupPolicy; promise: Promise<void> } | undefined;
 
-  constructor(readonly id: string, readonly config: Readonly<ConfigurationSnapshot>, private readonly chat: BackgroundChatPort, private readonly now: () => number = () => performance.now()) {}
+  constructor(readonly id: string, readonly config: Readonly<ConfigurationSnapshot>, private readonly chat: BackgroundChatPort, private readonly now: () => number = () => performance.now()) { this.requestLimit = config.settings.maxRequests; }
 
   async exchange(input: unknown, replyToTurnId?: string): Promise<BackgroundResult> {
     if (this.stopped) throw new BridgeError("SESSION_LOST", "This session has ended.");
@@ -67,8 +67,7 @@ export class BackgroundSession {
     if (!this.enabled) throw new BridgeError("COLLABORATION_DISABLED", "Collaboration is disabled; no new request or repair will be sent.");
     if (turn?.paused) return this.waitState(request.turnId, turn);
     if (!turn) {
-      if (this.awaitingUser) throw new BridgeError("USER_CONFIRMATION_REQUIRED", "Confirm the requested user input before another business exchange.");
-      if (this.used >= this.config.settings.maxRounds) throw new BridgeError("BUDGET_EXHAUSTED", "Allow the next batch before sending another business request.");
+      if (this.requestLimit !== null && this.used >= this.requestLimit) throw new BridgeError("BUDGET_EXHAUSTED", "The user-selected total request limit has been reached.");
       this.checkResults(request, replyToTurnId);
     }
     this.busy = true;
@@ -86,32 +85,32 @@ export class BackgroundSession {
         const previous = this.last ? this.turns.get(this.last) : undefined;
         if (previous) previous.accounted = true;
         const startedAt = this.now();
-        turn = { json, startedAt, deadline: startedAt + this.config.settings.totalWaitMinutes * 60_000, paused: false, repair: "none" };
+        turn = { json, startedAt, deadline: this.config.settings.replyTimeoutMinutes === null ? null : startedAt + this.config.settings.replyTimeoutMinutes * 60_000, paused: false, repair: "none" };
         this.turns.set(request.turnId, turn);
         this.pending = request.turnId;
         // Register before sending. An uncertain send must never be attempted again.
         this.used++;
-        turn.messageId = await this.send(formatRequestPrompt(request, this.config.settings.maxRounds - this.used));
+        turn.messageId = await this.send(formatRequestPrompt(request, this.requestLimit === null ? undefined : this.requestLimit - this.used));
         assertRunning();
       }
-      if (this.now() >= turn.deadline) { turn.paused = true; return this.waitState(request.turnId, turn); }
+      if (this.deadlineReached(turn)) { turn.paused = true; return this.waitState(request.turnId, turn); }
       if (turn.repair === "required") {
         turn.repair = "sent";
         delete turn.source;
         turn.messageId = await this.send(formatRepairPrompt());
         assertRunning();
       }
-      const remaining = turn.deadline - this.now();
+      const remaining = turn.deadline === null ? 90_000 : turn.deadline - this.now();
       if (remaining <= 0) { turn.paused = true; return this.waitState(request.turnId, turn); }
       const result = turn.source === undefined
-        ? await this.chat.read(turn.messageId!, Math.min(this.config.settings.readWindowSeconds * 1000, remaining), this.readAbort.signal)
+        ? await this.chat.read(turn.messageId!, Math.min(90_000, remaining), this.readAbort.signal)
         : { state: "complete" as const, text: turn.source };
       assertRunning();
       if (result.state === "complete") turn.source = result.text;
       if (this.stopped) throw new BridgeError("SESSION_LOST", "The plugin stopped while reading.");
       if (!this.enabled) throw new BridgeError("COLLABORATION_DISABLED", "Collaboration was disabled while waiting; no actions were delivered.");
       // A response arriving after the deadline is not delivered until the user continues.
-      if (this.now() >= turn.deadline) { turn.paused = true; return this.waitState(request.turnId, turn); }
+      if (this.deadlineReached(turn)) { turn.paused = true; return this.waitState(request.turnId, turn); }
       if (result.state === "waiting") return this.waitState(request.turnId, turn);
       try {
         const response = parseBridgeResponse(result.text, this.id, request.turnId);
@@ -127,10 +126,9 @@ export class BackgroundSession {
       this.pending = undefined;
       this.last = request.turnId;
       this.lastReply = { elapsedMs: Math.max(0, this.now() - turn.startedAt), repairCount: turn.repair === "sent" ? 1 : 0, round: this.used };
-      this.awaitingUser = turn.response.status === "needs_user";
       this.completedReport = turn.response.status === "complete" && request.state.phase === "complete"
         && request.state.completed.length > 0 && request.state.blockers.length === 0
-        && request.actionResults.every(result => result.outcome === "succeeded");
+        && request.actionResults.every(result => result.outcome === "succeeded" || result.outcome === "skipped");
       return { state: "response", response: structuredClone(turn.response) };
     } catch (error) {
       if (this.endRequested) throw new BridgeError("SESSION_ENDING", "The session was explicitly ended; do not retry the exchange.");
@@ -150,7 +148,7 @@ export class BackgroundSession {
     if (this.terminal) return { state: "failed" as const, turnId, errorCode: this.terminal.code };
     if (!this.enabled) return { state: "disabled" as const, turnId };
     if (turn.response) return { state: "response" as const, response: structuredClone(turn.response) };
-    if (turn.paused || this.now() >= turn.deadline) return { ...this.waitState(turnId, turn), state: "paused" as const };
+    if (turn.paused || this.deadlineReached(turn)) return { ...this.waitState(turnId, turn), state: "paused" as const };
     if (turn.repair === "required") return { state: "repair-required" as const, turnId };
     return this.waitState(turnId, turn);
   }
@@ -159,32 +157,28 @@ export class BackgroundSession {
     if (!this.hasCompletedReport() || !this.last) return null;
     return {turnId:this.last,result:{state:"response" as const,response:structuredClone(this.turns.get(this.last)!.response!)}};
   }
-  confirmUser(): void {
-    if (!this.awaitingUser || this.busy || this.stopped || this.terminal) throw new BridgeError("NOT_PAUSED", "This session is not awaiting user confirmation.");
-    this.awaitingUser = false;
-  }
   status() {
     const turn = this.pending ? this.turns.get(this.pending) : undefined;
     const response = this.last ? this.turns.get(this.last)?.response : undefined;
-    const deadlineReached = turn && (turn.paused || this.now() >= turn.deadline);
+    const deadlineReached = turn && (turn.paused || this.deadlineReached(turn));
     return {
-      state: this.cleanupFailed ? "cleanup-failed" : this.endRequested ? "ending" : this.terminal ? "failed" : this.awaitingUser ? "needs-user" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
-      usedRounds: this.used, maxRounds: this.config.settings.maxRounds, busy: this.busy,
-      remainingRounds: Math.max(0, this.config.settings.maxRounds - this.used),
+      state: this.cleanupFailed ? "cleanup-failed" : this.endRequested ? "ending" : this.terminal ? "failed" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "needs_user" ? "needs-user" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
+      usedRequests: this.used, maxRequests: this.requestLimit, busy: this.busy,
+      remainingRequests: this.requestLimit === null ? null : Math.max(0, this.requestLimit - this.used),
       lastReply: this.lastReply ? { ...this.lastReply } : null,
       errorCode: this.cleanupFailed ? "CLEANUP_FAILED" : this.terminal?.code ?? null,
       cleanupReason: this.cleanupReason,
       titleError: this.chat.diagnostics?.().titleError ?? null,
       completionReported: this.completedReport,
-      ...(turn ? { turnId: this.pending, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline - turn.startedAt, repair: turn.repair } : {}),
+      ...(turn ? { turnId: this.pending, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline === null ? null : turn.deadline - turn.startedAt, longWait: this.now() - turn.startedAt >= 15 * 60_000, repair: turn.repair } : {}),
     };
   }
   stop(): void { this.stopped = true; this.readAbort?.abort(); this.chat.dispose?.(); this.turns.clear(); this.lastReply = null; }
 
-  allowNextBatch(): void {
+  removeRequestLimit(): void {
     if (this.stopped || this.terminal) throw new BridgeError("SESSION_LOST", "This session cannot continue.");
-    if (this.busy || this.pending || this.used < this.config.settings.maxRounds) throw new BridgeError("BATCH_NOT_EXHAUSTED", "The current batch has not finished.");
-    this.used = 0;
+    if (this.busy || this.pending) throw new BridgeError("CALL_BUSY", "Wait for the current reply before changing its limit.");
+    this.requestLimit = null;
   }
 
   async finish(policy: CleanupPolicy): Promise<void> {
@@ -243,7 +237,7 @@ export class BackgroundSession {
     let halted = false;
     for (const [index, result] of request.actionResults.entries()) {
       if (result.actionId !== previous.actions[index]?.id || (halted && result.outcome !== "skipped")) throw new BridgeError("ACTION_RESULTS_INVALID", "Action results are unknown, duplicated, out of order or continue after failure.");
-      if (result.outcome !== "succeeded") halted = true;
+      if (result.outcome === "failed" || result.outcome === "blocked") halted = true;
     }
   }
 
@@ -252,12 +246,13 @@ export class BackgroundSession {
     if (this.stopped || this.terminal) throw new BridgeError("SESSION_LOST", "This session cannot continue.");
     if (this.busy) throw new BridgeError("CALL_BUSY", "Wait for the current read to return.");
     const turn = this.pending ? this.turns.get(this.pending) : undefined;
-    if (!turn || (!turn.paused && this.now() < turn.deadline)) throw new BridgeError("NOT_PAUSED", "No reply is paused at its waiting limit.");
-    turn.deadline = this.now() + this.config.settings.totalWaitMinutes * 60_000;
+    if (!turn || turn.deadline === null || (!turn.paused && !this.deadlineReached(turn))) throw new BridgeError("NOT_PAUSED", "No reply is paused at its waiting limit.");
+    turn.deadline = this.now() + this.config.settings.replyTimeoutMinutes! * 60_000;
     turn.paused = false;
   }
 
   private waitState(turnId: string, turn: Turn): BackgroundResult {
-    return { state: turn.paused ? "paused" : "waiting", turnId, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline - turn.startedAt };
+    return { state: turn.paused ? "paused" : "waiting", turnId, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline === null ? null : turn.deadline - turn.startedAt, longWait: this.now() - turn.startedAt >= 15 * 60_000 };
   }
+  private deadlineReached(turn: Turn): boolean { return turn.deadline !== null && this.now() >= turn.deadline; }
 }

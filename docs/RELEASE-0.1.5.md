@@ -1,29 +1,29 @@
 # Bridge 0.1.5
 
-Bridge now recovers from App services arriving after plugin startup, and refreshes an invalid idle connection automatically. This version also improves planner instructions, diagnostics, and the recovery of saved draft controls.
+Bridge now keeps Chat and Codex working toward task completion without fixed batches. This release also fixes delayed startup and slow native requests that previously required manual recovery.
 
-## Fixed
+## Highlights
 
-- Replaced one-shot native Chat discovery with serialized retries: 1, 2, 5, 10, 30, then at most one retry per 60 seconds. Discovery and catalog loading share a 15-second deadline.
-- Clean up partial UI registration before retrying. Stopped or timed-out work cannot overwrite a newer connection; healthy idle connections are checked every 30 seconds.
-- Preserve active sessions during recovery. No automatic resend, conversation replacement, cleanup, or model switch occurs.
-- Stop repeated preparation attempts for restored draft instructions; provide an explicit action to prepare fresh instructions.
-- Remove superseded unsent bindings, account for Windows JSON escaping in response limits, and recognize status examples inside code fences correctly.
+- **Task-driven collaboration.** Request limits and hard reply deadlines are optional. Answer Chat questions in the current Codex task without an extra confirmation button.
+- **Automatic connection recovery.** Retry while App services are starting, and reconnect an invalid idle connection without interrupting an owned session.
+- **Slow startup stays recoverable.** The 10-second startup window now continues waiting for the original request instead of reporting a permanent send failure. Messages are not resent.
+- **Completion and cleanup are separate.** Once work is verified, a failed Chat cleanup can be retried separately without blocking the next task.
+- **Clearer guidance and controls.** Rewritten planner instructions, request counts, reply timing, and an explicit way to refresh stale collaboration instructions.
+- **Simpler project documentation.** Rewritten English and Chinese READMEs with a composer screenshot. Removed the unused foreground adapter and controller.
 
-## Improved
+## Upgrading
 
-- Show remaining rounds, final-verification reminders, and the last validated reply's elapsed time and repair count.
-- Rewrite the default planner prompt and shorten the bundled skill: Chat leads decisions; Codex reviews and executes under existing permissions. Prompts include the remaining feedback budget.
-- Remove the unused foreground DOM adapter/controller and their dedicated tests.
-- Add English and Chinese READMEs with anonymized previews of the actual UI components. Preview timing values are examples, not benchmarks.
+Install `bridge-0.1.5.zip` with native Windows **Codex Script Loader 0.5.12+**. The renderer and bundled skill update together; **PowerShell 7** is required. Plugin identity and permissions are unchanged.
 
-## Upgrade and validation
+Old default limits of 3 rounds and 15 minutes become uncapped operation. Non-default numeric limits are preserved, with an old batch count becoming a total request cap. Model and cleanup preferences remain unchanged.
 
-Install `bridge-0.1.5.zip` through native Windows Loader 0.5.12+; renderer and skill update together. PowerShell 7 is required for the helper. Permissions and plugin identity are unchanged. Reload clears active session state, so finish or retain active work before installing.
+Finish active collaborations before installing. After a reload, prepare fresh collaboration instructions if an old draft remains. App updates may require future compatibility updates.
 
-Recovery is validated with controlled delayed-service, timeout, stale-result, partial-registration, idle-reconnection, and active-session tests. In-place runtime checks verify the installed package separately. This does not claim a new Pro generation test or a complete shutdown/startup test of every App build. See [validation scope](VALIDATION-0.1.5.md).
+## Validation
 
-Assets: `bridge-0.1.5.zip` and `bridge-0.1.5.zip.sha256`.
+Type checking, lint, **161 tests across 16 files**, build, and ZIP validation passed. The candidate was hot-loaded and verified in the running App. A live four-exchange Sol High collaboration completed successfully and deleted its test Chat. Details: [validation scope](VALIDATION-0.1.5.md).
+
+Download **`bridge-0.1.5.zip`** and its **`.sha256`** checksum from this release. Use the plugin ZIP rather than GitHub's source-code archives.
 
 [Full Changelog](https://github.com/JHees/chatgpt-codex-bridge/compare/v0.1.4...v0.1.5)
 
@@ -31,29 +31,29 @@ Assets: `bridge-0.1.5.zip` and `bridge-0.1.5.zip.sha256`.
 
 # Bridge 0.1.5 中文更新说明
 
-修复 App 服务晚于插件启动时无法自动接入的问题，并在空闲连接失效后自动恢复。同时改进默认协作提示词、诊断信息和恢复草稿的处理。
+Chat 与 Codex 现在围绕任务持续协作，默认不再按固定批次中断。本版本同时修复启动接入延迟和原生请求较慢时误报失败的问题。
 
-## 修复
+## 主要变化
 
-- 将一次性 Chat 服务发现改为串行退避重试：1、2、5、10、30 秒，随后每次间隔最长60秒；服务发现与模型目录读取合计最多15秒。
-- 部分界面注册失败时先清理再重试；过期或已停止的尝试不能覆盖新连接。健康空闲连接每30秒检查一次。
-- 恢复期间保留活动会话，不自动重发、替换会话、清理或切换模型。
-- 恢复草稿存在旧协作说明时停止反复准备，提供明确的重新准备入口。
-- 回收被替代且确定未发送的绑定，按Windows JSON转义后的大小校验回复，修正代码块中状态示例的误判。
+- **按任务持续推进**：总请求上限和回复硬超时改为可选；Chat 有问题时直接在当前 Codex 任务回答，无须额外点击确认。
+- **连接自动恢复**：App 服务尚未就绪时自动重试，空闲连接失效后自动重连，并保留已有协作。
+- **慢启动不再误报失败**：超过10秒仍未收到启动确认时，继续等待原请求，不再留下永久发送错误，也不会重发消息。
+- **验收与清理分开处理**：任务完成后，Chat 清理失败可以单独重试，不再占住下一项任务。
+- **提示词与控制更清晰**：重写规划端说明，显示请求计数和回复耗时，并提供重新准备旧协作说明的入口。
+- **精简项目文档**：重写中英文 README，展示输入区入口；移除已停用的前台适配器和控制器。
 
-## 改进
+## 升级方式
 
-- 显示剩余轮数、最终验收提醒、最近有效回复耗时和格式修复次数。
-- 重写默认规划提示词，精简随包skill：Chat主导技术决策，Codex审核后按现有权限执行；每轮带入剩余反馈预算。
-- 删除已停用的前台DOM适配器、旧控制器及其专属测试。
-- 重写中英文README，加入真实组件的匿名预览图；图中耗时为示例，不是性能数据。
+使用原生 Windows **Codex Script Loader 0.5.12+** 安装 `bridge-0.1.5.zip`，renderer 与随包 skill 一起更新；需要 **PowerShell 7**。插件身份和权限不变。
 
-## 升级与验证
+旧默认的3轮和15分钟限制会变为不设限。非默认数值继续保留，其中旧批次轮数转为总请求上限；模型与清理偏好保持不变。
 
-使用原生Windows Loader 0.5.12+安装`bridge-0.1.5.zip`，renderer与skill一起更新。helper需要PowerShell 7。插件身份和权限不变。重载会清空活动会话状态，请先结束或保留正在进行的协作。
+安装前请结束正在进行的协作。重载后若草稿中保留旧说明，重新准备协作说明即可。后续 App 更新可能需要适配。
 
-恢复流程已通过延迟就绪、超时、过期结果、部分注册、空闲重连和活动会话保护的受控测试；实际安装包另做原位运行核验。没有宣称本次新增了Pro生成验收或覆盖所有App版本的完整退出再启动测试。详见[验证范围](VALIDATION-0.1.5.md)。
+## 验证
 
-安装产物：`bridge-0.1.5.zip`和`bridge-0.1.5.zip.sha256`。
+类型检查、lint、**16个测试文件共161项测试**、构建和 ZIP 校验通过。候选已在运行中的 App 热加载并验证；一次 Sol 高思考模式的4次业务交互完整结束，测试 Chat 正常删除。详见[验证范围](VALIDATION-0.1.5.md)。
+
+请下载本 Release 中的 **`bridge-0.1.5.zip`** 及其 **`.sha256`** 校验文件，使用插件 ZIP 安装。
 
 [完整变更](https://github.com/JHees/chatgpt-codex-bridge/compare/v0.1.4...v0.1.5)
