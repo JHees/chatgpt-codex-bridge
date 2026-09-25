@@ -99,7 +99,7 @@ it.each([
   expect(title.textContent).toBe(expected); expect(f.preparations).toHaveLength(0);
   ui.stop(); expect(title.textContent).toBe("插件说明（已有草稿）");
 });
-function fixture(enabled = false, navigation = true, port?: BackgroundChatPort) {
+function fixture(enabled = false, navigation = true, port?: BackgroundChatPort, restored = false) {
   const window = new Window({ url: "app://-/index.html" });
   const document = window.document as unknown as Document;
   document.documentElement.lang = "en";
@@ -115,7 +115,7 @@ function fixture(enabled = false, navigation = true, port?: BackgroundChatPort) 
   const writes: unknown[] = [], preparations: unknown[] = [];
   let edited = false, accepted = false;
   const receipt = (bindingId: string) => accepted ? { state: "accepted", bindingId, hostId: task.hostId, taskId: task.taskId, turnId: "native-turn" } : { state: "prepared", bindingId };
-  let mountedTask = task.taskId, clears = 0, settingsOpened = 0;
+  let mountedTask = task.taskId, clears = 0, settingsOpened = 0, prepareCalls = 0;
   let onChange: ((event: { target: "context"; action: "removed" | "edited" | "expanded" | "collapsed"; revision: string; identity: typeof task }) => void) | undefined;
   const api: LoaderApi = {
     version: "test", storage: { get: () => null, set: (_key, value) => { writes.push(value); } },
@@ -125,8 +125,8 @@ function fixture(enabled = false, navigation = true, port?: BackgroundChatPort) 
       spec.render(composer, task);
       return { getStatus: () => ({ available: true, hostId: task.hostId, taskId: mountedTask, context: { state: edited ? "missing-or-edited" : "prepared" } }),
         getSubmission: receipt,
-        prepareSubmission: input => { preparations.push(input); return { state: "prepared", bindingId: `binding-${preparations.length}` }; },
-        clearContext: () => { clears++; }, unregister: () => {},
+        prepareSubmission: input => { prepareCalls++; if(restored) throw Object.assign(Error("Saved draft"),{code:"CONTEXT_EXISTS"}); preparations.push(input); return { state: "prepared", bindingId: `binding-${preparations.length}` }; },
+        clearContext: () => { clears++; restored=false; }, unregister: () => {},
       };
     } },
   };
@@ -137,8 +137,19 @@ function fixture(enabled = false, navigation = true, port?: BackgroundChatPort) 
   const fire = (element: Element, type: string): void => { const event = document.createEvent("Event"); event.initEvent(type, false, true); element.dispatchEvent(event); };
   return { window, document, settings, composer, ui, api, controller, refreshModels, configuration, writes, preparations, fire,
     managedChange: (action: "removed" | "edited" | "expanded" | "collapsed", identity = task) => onChange?.({ target: "context", action, revision: "binding-1", identity }),
-    accept: () => { accepted = true; }, edit: () => { edited = true; }, navigate: () => { mountedTask = "task-b"; }, clears: () => clears, settingsOpened: () => settingsOpened };
+    accept: () => { accepted = true; }, edit: () => { edited = true; }, navigate: () => { mountedTask = "task-b"; }, clears: () => clears, settingsOpened: () => settingsOpened, prepareCalls: () => prepareCalls };
 }
+
+it("leaves restored instructions untouched and retries only after explicit re-preparation", async () => {
+  vi.useFakeTimers(); const f=fixture(true,true,undefined,true);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(f.prepareCalls()).toBe(1); expect(f.clears()).toBe(0);
+  f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  const retry=[...f.document.querySelectorAll<HTMLButtonElement>(".bridge-popover button")].find(b=>b.textContent==="Prepare fresh collaboration instructions")!;
+  expect(retry).toBeDefined(); retry.click(); await vi.advanceTimersByTimeAsync(0);
+  expect(f.clears()).toBe(1); expect(f.preparations).toHaveLength(1);
+  expect(f.ui.compatibility().errorCode).toBeNull();
+});
 
 it("Loader Remove turns collaboration off immediately without an API echo or automatic reinsertion", async () => {
   vi.useFakeTimers(); const f = fixture(true);
@@ -190,9 +201,62 @@ it("registers one settings page and an off task control without sending or prepa
   const f = fixture(); await Promise.resolve();
   expect(f.settings.querySelector("form")).not.toBeNull();
   expect(f.settings.textContent).toContain("Composer interface: available");
+  expect(f.ui.compatibility()).toMatchObject({ bundledSkill: "loader-managed-unverified", bundledSkillNote: expect.stringContaining("not an installation failure") });
+  expect(f.settings.textContent).toContain("not an installation failure");
   expect(f.composer.textContent).toContain("off");
   expect(f.preparations).toHaveLength(0);
   expect(f.writes).toHaveLength(0);
+});
+
+it("updates remaining rounds and reply diagnostics in the open task panel through completion", async () => {
+  vi.useFakeTimers();
+  let source = "Bridge status: continue\nInspect the source";
+  const port: BackgroundChatPort = { check: async () => {}, send: async () => "message", read: async () => ({state:"complete",text:source}), finish: async () => {} };
+  const f = fixture(true, true, port); await vi.advanceTimersByTimeAsync(1); f.accept();
+  const task = { hostId: "local", taskId: "task-a" };
+  const snapshot = f.controller.status({task,bindingId:"binding-1"}).prepared!;
+  const request = { protocol:"codex-chat-bridge/v1", sessionId:"session", turnId:"turn-1", kind:"request", objective:"Check", state:{phase:"verify",summary:"Inspect",completed:[],blockers:[]}, message:"Plan", actionResults:[] };
+  const call = {task,bindingId:"binding-1",snapshotId:snapshot.id,request};
+  await f.controller.exchange(call);
+  f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  const panel = f.document.querySelector(".bridge-popover")!;
+  expect(panel.textContent).toContain("Remaining rounds: 2");
+  expect(panel.textContent).toContain("Final feedback counts toward the budget");
+  expect([...panel.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Allow next batch")?.hidden).toBe(true);
+  for (let i=2;i<=3;i++) {
+    await f.controller.exchange({...call,replyToTurnId:`turn-${i-1}`,request:{...request,turnId:`turn-${i}`,kind:"result",actionResults:[{actionId:"plan",outcome:"succeeded",summary:"Checked",evidence:["Verified"]}]}});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(panel.textContent).toContain(`Remaining rounds: ${3-i}`);
+    if (i===2) expect(panel.textContent).toContain("Reserve the last round for final verification");
+    expect(panel.textContent).toContain(`round ${i}`);
+    expect(panel.textContent).toContain(`${i}/3`);
+  }
+  expect(f.controller.status({task}).active?.usedRounds).toBe(3);
+  expect([...panel.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Allow next batch")?.hidden).toBe(false);
+  f.controller.consent(task,"session","next-batch");
+  source = "Bridge status: complete\nEvidence reviewed";
+  await f.controller.exchange({...call,replyToTurnId:"turn-3",request:{...request,turnId:"turn-4",kind:"result",state:{phase:"complete",summary:"Verified",completed:["Passed"],blockers:[]},actionResults:[{actionId:"plan",outcome:"succeeded",summary:"Checked",evidence:["Verified"]}]}});
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.controller.status({task}).active).toBeNull();
+  expect(f.document.querySelector(".bridge-popover")).toBeNull();
+  f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  const completedPanel = f.document.querySelector(".bridge-popover")!;
+  expect(completedPanel.textContent).toContain("Last reply:");
+  expect(completedPanel.textContent).not.toContain("Remaining rounds:");
+});
+
+it("releases the task-panel polling interval on close and stop", async () => {
+  vi.useFakeTimers(); const f=fixture(); await vi.advanceTimersByTimeAsync(0);
+  const baseline=vi.getTimerCount(), trigger=f.composer.querySelector("button")!;
+  trigger.click(); await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(baseline+1);
+  trigger.click(); await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(baseline);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(vi.getTimerCount()).toBe(baseline);
+  trigger.click(); await vi.advanceTimersByTimeAsync(0);
+  f.ui.stop();
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("uses whole-trigger menus for read window and cleanup, saving archive without a native select", async () => {

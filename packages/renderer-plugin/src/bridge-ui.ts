@@ -7,6 +7,12 @@ import { mountContextPresentation } from "./context-presentation.js";
 
 export const DEFAULTS_KEY = "collaboration-defaults-v1";
 
+export function bundledSkillDiagnostics(zh = false) {
+  return { bundledSkill: "loader-managed-unverified", bundledSkillNote: zh
+    ? "随包 skill 由 Loader 管理；此字段不独立核验安装状态，不表示安装失败。"
+    : "Bundled skill is managed by Loader; this field does not independently verify installation and is not an installation failure." };
+}
+
 /** Native-style defaults page and a separate task-scoped quick selector. */
 export class BridgeUi {
   private handle: ComposerHandle | undefined;
@@ -16,6 +22,7 @@ export class BridgeUi {
   private readonly timers = new Set<ReturnType<typeof setInterval>>();
   private readonly accessoryUpdates = new Map<string, () => void>();
   private readonly prepared = new Map<string, { bindingId: string; config: Readonly<PreparedConfiguration> }>();
+  private readonly blockedPreparation = new Set<string>();
   private lastError: string | null = null;
   private backgroundError: string | null = null;
   private stopped = false;
@@ -54,26 +61,28 @@ export class BridgeUi {
         if (this.stopped || event.target !== "context" || event.action !== "removed" || !this.ownsMountedContext(event.identity)) return;
         this.control.setEnabled(event.identity, false);
         const key = JSON.stringify(event.identity);
-        this.prepared.delete(key); this.closeQuick?.(); this.accessoryUpdates.get(key)?.();
+        this.prepared.delete(key); this.blockedPreparation.delete(key); this.closeQuick?.(); this.accessoryUpdates.get(key)?.();
       },
     });
     this.refreshDiagnostics();
   }
   receipt(bindingId: string): unknown { return this.handle?.getSubmission?.(bindingId) ?? { state: "unavailable" }; }
-  backgroundChanged(code: string | null): void {
+  backgroundChanged(code: string | null, recovering = false): void {
     this.backgroundError = code && /^[A-Z_]{1,64}$/.test(code) ? code : null;
-    for (const element of this.document.querySelectorAll("[data-bridge-background]")) element.textContent = this.backgroundError ?? "";
+    for (const element of this.document.querySelectorAll("[data-bridge-background]")) element.textContent = this.backgroundError
+      ? `${this.backgroundError}${recovering ? this.t(" · 正在自动恢复连接", " · Reconnecting automatically") : ""}` : "";
     this.refreshDiagnostics();
   }
   private ownsMountedContext(owner: ComposerIdentity): boolean {
     const current = this.handle?.getStatus();
     return !!current?.available && ("draftId" in owner ? current.draftId === owner.draftId : current.hostId === owner.hostId && current.taskId === owner.taskId);
   }
-  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareSubmission === "function", mounted: this.handle?.getStatus().available ?? false, contextPresentation: this.handle?.getStatus().context?.display ?? "text", errorCode: this.lastError }; }
+  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareSubmission === "function", mounted: this.handle?.getStatus().available ?? false, contextPresentation: this.handle?.getStatus().context?.display ?? "text", errorCode: this.lastError,
+    ...bundledSkillDiagnostics(this.zh) }; }
 
   private diagnosticsText(): string {
     const state = this.compatibility();
-    return `${this.t("插件版本", "Plugin version")}: ${this.api.version} · ${this.t("后台模型目录", "Background catalog")}: ${this.control.configuration.models().length} · ${this.t("输入区接口", "Composer interface")}: ${state.composer ? this.t("可用", "available") : this.t("不可用", "unavailable")} · ${this.t("随包 skill：由 Loader 管理；安装状态需由 Loader 核对", "Bundled skill: Loader-managed; verify installation in Loader")}`;
+    return `${this.t("插件版本", "Plugin version")}: ${this.api.version} · ${this.t("后台模型目录", "Background catalog")}: ${this.control.configuration.models().length} · ${this.t("输入区接口", "Composer interface")}: ${state.composer ? this.t("可用", "available") : this.t("不可用", "unavailable")} · ${state.bundledSkillNote}`;
   }
   private refreshDiagnostics(): void {
     for (const element of this.document.querySelectorAll("[data-bridge-diagnostics]")) element.textContent = this.diagnosticsText();
@@ -189,7 +198,7 @@ export class BridgeUi {
       };
       input.oninput = change; input.onchange = change;
     };
-    numeric(rounds, "maxRounds"); label(this.t("每批业务轮数（1–8）", "Business rounds per batch (1–8)"), rounds);
+    numeric(rounds, "maxRounds"); label(this.t("每批业务轮数（1–8）", "Business rounds per batch (1–8)"), rounds, this.t("结果反馈和最终验收也计入轮数。", "Result feedback and final verification also count toward the budget."));
     const windowTitle = this.t("单次读取窗口", "Read window");
     label(windowTitle, choice(windowTitle, ([30, 60, 90] as const).map(seconds => ({value:seconds,label:`${seconds} s`})), () => value.readWindowSeconds, readWindowSeconds => { commit({readWindowSeconds}); }));
     const total = this.node("input"); total.type = "number"; total.min = "1"; total.max = "60"; total.step = "1"; total.value = String(value.totalWaitMinutes); total.required = true;
@@ -222,13 +231,14 @@ export class BridgeUi {
       const waiting = active?.state === "waiting" || active?.state === "paused";
       button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)} / ${clock(active.allowedMs ?? 0)}` : ""}` : `${this.t("Chat 协作", "Chat collaboration")}: ${settings.enabled ? this.t("开", "on") : this.t("关", "off")}${settings.enabled ? ` · ${name} · ${selected?.effortLabel ?? "—"}` : ""}`;
       if (!active && settings.enabled && status?.connection) button.textContent = `${this.t("等待 Codex 接入", "Waiting for Codex to connect")} · ${name}`;
+      if (this.blockedPreparation.has(key)) button.textContent = this.t("旧协作说明需重新准备", "Saved collaboration instructions need renewal");
       // Keep the user's explicit Pro choice visible even when model details truncate.
       if ((active?.config.model.mode ?? (settings.enabled ? selected?.mode : undefined)) === "pro") button.textContent = `Pro · ${button.textContent}`;
       button.title = button.textContent;
       const prepared = this.prepared.get(key);
       // Do not re-add a removed/edited instruction. Only a positively accepted submission ends this preparation.
       if (prepared && (this.receipt(prepared.bindingId) as { state?: string }).state === "accepted") this.prepared.delete(key);
-      if (settings.enabled && settings.modelKey !== null && !this.prepared.has(key) && !active && typeof this.handle?.prepareSubmission === "function") {
+      if (settings.enabled && settings.modelKey !== null && !this.prepared.has(key) && !this.blockedPreparation.has(key) && !active && typeof this.handle?.prepareSubmission === "function") {
         try { this.prepare(owner); } catch (error) { this.error(error); }
       }
     };
@@ -236,7 +246,7 @@ export class BridgeUi {
     this.accessoryUpdates.set(key, update);
     queueMicrotask(update);
     const timer = setInterval(update, 1000); this.timers.add(timer);
-    return () => { this.accessoryUpdates.delete(key); this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
+    return () => { this.accessoryUpdates.delete(key); this.blockedPreparation.delete(key); this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
   }
   private stateLabel(state: string): string {
     if (state === "ending") return this.t("正在结束协作", "Ending collaboration");
@@ -249,12 +259,19 @@ export class BridgeUi {
   private prepare(owner: ComposerIdentity): void {
     const config = this.control.prepare(owner, `snapshot-${crypto.randomUUID()}`);
     const text = this.t(
-      `使用随包 bridge-chat skill 协作：Chat 规划，Codex 执行并回报证据；沿用现有权限，接入失败时暂停。Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}。配置 ${config.id}；其余参数由 status 读取。`,
-      `Use the bundled bridge-chat skill: Chat plans; Codex executes and reports evidence under existing permissions. Pause if connection fails. Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}. Configuration ${config.id}; read remaining parameters with status.`);
+      `使用随包 bridge-chat skill 协作：Chat 负责技术决策和验收，Codex 审核后执行并回报证据；沿用现有权限，接入失败时暂停。Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}。配置 ${config.id}；其余参数由 status 读取。`,
+      `Use the bundled bridge-chat skill: Chat leads decisions and verification; Codex reviews, executes and reports evidence under existing permissions. Pause if connection fails. Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}. Configuration ${config.id}; read remaining parameters with status.`);
     const summary = this.handle?.getStatus().contextDisplay === "collapsed-v1" ? this.t("Chat 协作", "Chat collaboration") + ` · ${config.model.title} · ${config.model.effortLabel}` : undefined;
-    const receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text, ...(summary ? {summary} : {}) });
+    let receipt;
+    try { receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text, ...(summary ? {summary} : {}) }); }
+    catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "CONTEXT_EXISTS") this.blockedPreparation.add(JSON.stringify(owner));
+      throw error;
+    }
     this.control.register(receipt.bindingId, owner, config);
     this.prepared.set(JSON.stringify(owner), { bindingId: receipt.bindingId, config });
+    this.lastError = null;
+    for (const element of this.document.querySelectorAll("[data-bridge-error]")) element.textContent = "";
   }
   private openPopup(anchor: HTMLButtonElement, title: string, available: () => boolean = () => true) {
     const wasOpen = anchor.getAttribute("aria-expanded") === "true";
@@ -301,7 +318,7 @@ export class BridgeUi {
       if (!this.ownsMountedContext(owner)) { close(); return; }
       try {
         this.control.configuration.updateTask(owner, value); this.control.setEnabled(owner, value.enabled);
-        this.handle?.clearContext(); this.prepared.delete(JSON.stringify(owner));
+        this.handle?.clearContext(); this.prepared.delete(JSON.stringify(owner)); this.blockedPreparation.delete(JSON.stringify(owner));
         if (value.enabled && value.modelKey !== null && !active) this.prepare(owner);
       } catch (error) { this.error(error); }
     };
@@ -324,12 +341,45 @@ export class BridgeUi {
       catch (error) { this.error(error); }
     }));
     panel.append(footer);
+    if (this.blockedPreparation.has(JSON.stringify(owner)) && !active) {
+      panel.append(this.node("p", this.t("草稿中的旧说明未被改写。重新准备只替换 Bridge 说明，其余草稿保持原样。", "Saved instructions were left untouched. Preparing fresh instructions replaces only the Bridge block.")),
+        this.button(this.t("重新准备协作说明", "Prepare fresh collaboration instructions"), () => { apply(); close(); }));
+    }
+    let stateNode: HTMLParagraphElement | undefined;
+    const consentButtons = new Map<string, HTMLButtonElement>();
+    if (!("draftId" in owner)) {
+      const diagnostics = this.node("p"); diagnostics.className = "bridge-quick-state"; diagnostics.setAttribute("role", "status"); panel.append(diagnostics);
+      diagnostics.style.whiteSpace = "pre-line";
+      const update = (): void => {
+        if (!this.ownsMountedContext(owner)) { close(); return; }
+        const current = this.control.status({ task: owner }), lines: string[] = [];
+        // Session-bound controls must not outlive their owner or target a replacement session.
+        if (current.active?.sessionId !== active?.sessionId) { close(); return; }
+        if (current.active) {
+          if (stateNode) stateNode.textContent = `${this.stateLabel(current.active.state)} · ${current.active.usedRounds}/${current.active.maxRounds} · ${this.t("修改下次生效", "Changes apply next time")}`;
+          for (const [action, button] of consentButtons) button.hidden = action === "next-batch"
+            ? current.active.remainingRounds !== 0 || current.active.busy || current.active.turnId !== undefined
+            : current.active.state !== (action === "continue-waiting" ? "paused" : "needs-user");
+          lines.push(`${this.t("剩余轮数", "Remaining rounds")}: ${current.active.remainingRounds} · ${this.t("最终反馈计入预算", "Final feedback counts toward the budget")}`);
+          if (current.active.remainingRounds === 1) lines.push(this.t("建议将最后一轮留给最终验收。", "Reserve the last round for final verification."));
+        }
+        if (current.lastReply) {
+          const { elapsedMs, repairCount, round } = current.lastReply;
+          lines.push(this.t(`最近回复：${(elapsedMs / 1000).toFixed(1)} 秒 · 格式修复 ${repairCount} 次 · 本批第 ${round} 轮`, `Last reply: ${(elapsedMs / 1000).toFixed(1)} s · ${repairCount} format repairs · batch round ${round}`));
+        }
+        diagnostics.textContent = lines.join("\n"); diagnostics.hidden = lines.length === 0;
+        position();
+      };
+      update();
+      const timer = setInterval(update, 1000); popup.cleanup(() => clearInterval(timer));
+    }
     if (!active && value.enabled && !("draftId" in owner) && this.control.status({task:owner}).connection) {
       const pending = this.node("p", this.t("说明已提交，尚未启动 Chat。请查看 Codex 的工具授权或错误；接入失败时应暂停，不能当作协作完成。", "Instructions submitted. No Chat has started. Check Codex tool approvals or errors; stop if connection fails."));
       pending.className = "bridge-quick-state"; pending.setAttribute("role", "status"); panel.append(pending);
     }
     if (active && !("draftId" in owner)) {
       const state = this.node("p", `${this.stateLabel(active.state)} · ${active.usedRounds}/${active.maxRounds} · ${this.t("修改下次生效", "Changes apply next time")}`); state.className = "bridge-quick-state"; panel.append(state);
+      stateNode = state;
       for (const code of [active.cleanupReason, active.titleError]) if (code) {
         const detail=this.node("p",code); detail.className="bridge-quick-state"; detail.setAttribute("role","status"); panel.append(detail);
       }
@@ -340,10 +390,13 @@ export class BridgeUi {
       const details = this.node("details"), actions = this.node("div"); actions.className = "bridge-actions";
       details.append(this.node("summary", this.t("管理当前协作", "Manage collaboration")), actions); panel.append(details);
       details.addEventListener("toggle", position);
-      const add = (label: string, action: "next-batch" | "continue-waiting" | "user-confirmed"): void => { actions.append(this.button(label, () => { this.control.consent(owner, active.sessionId, action); close(); })); };
-      if (active.usedRounds >= active.maxRounds && !active.busy) add(this.t("允许下一批", "Allow next batch"), "next-batch");
-      if (active.state === "paused") add(this.t("继续等待", "Continue waiting"), "continue-waiting");
-      if (active.state === "needs-user") add(this.t("已提供所需确认", "Required confirmation provided"), "user-confirmed");
+      const add = (label: string, action: "next-batch" | "continue-waiting" | "user-confirmed", available: boolean): void => {
+        const button = this.button(label, () => { this.control.consent(owner, active.sessionId, action); close(); });
+        button.hidden = !available; consentButtons.set(action, button); actions.append(button);
+      };
+      add(this.t("允许下一批", "Allow next batch"), "next-batch", active.remainingRounds === 0 && !active.busy && active.turnId === undefined);
+      add(this.t("继续等待", "Continue waiting"), "continue-waiting", active.state === "paused");
+      add(this.t("已提供所需确认", "Required confirmation provided"), "user-confirmed", active.state === "needs-user");
       for (const policy of ["retain", "archive", "delete"] as const) {
         const labels = {retain:this.t("结束并保留", "End and retain"),archive:this.t("结束并归档", "End and archive"),delete:this.t("结束并删除", "End and delete")};
         actions.append(this.button(labels[policy], async () => {
@@ -368,6 +421,6 @@ export class BridgeUi {
     this.stopped = true; this.closeQuick?.(); this.handle?.unregister(); this.page?.unregister();
     this.stopContextPresentation?.(); this.stopContextPresentation = undefined;
     for (const timer of this.timers) clearInterval(timer); this.timers.clear();
-    this.prepared.clear(); this.accessoryUpdates.clear(); this.css.remove();
+    this.prepared.clear(); this.blockedPreparation.clear(); this.accessoryUpdates.clear(); this.css.remove();
   }
 }

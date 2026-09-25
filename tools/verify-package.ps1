@@ -36,7 +36,7 @@ try {
     }
     if ($entries.Count -gt 256 -or $bytes -gt 8MB) { throw 'Package exceeds Loader limits.' }
     $skillPath = "skills/$($manifest.agentSkill)"
-    foreach ($required in @('manifest.json', 'index.js', 'README.md', 'LICENSE', 'NOTICE.md', "$skillPath/SKILL.md", "$skillPath/references/protocol.md", "$skillPath/scripts/invoke-bridge.ps1")) {
+    foreach ($required in @('manifest.json', 'index.js', 'README.md', 'LICENSE', 'NOTICE.md', "$skillPath/SKILL.md", "$skillPath/references/protocol.md", "$skillPath/scripts/invoke-bridge.ps1", "$skillPath/scripts/wait-turn.ps1")) {
         if (-not $entries.ContainsKey($required)) { throw "Missing release file: $required" }
     }
     $reader = [IO.StreamReader]::new($entries['manifest.json'].Open(), [Text.Encoding]::UTF8)

@@ -1,4 +1,4 @@
-import { BackgroundSession, type BackgroundChatPort, type BackgroundResult } from "./background-session.js";
+import { BackgroundSession, type BackgroundChatPort, type BackgroundResult, type ReplyDiagnostics } from "./background-session.js";
 import type { ChatConfiguration, ComposerIdentity, ConfigurationSnapshot, PreparedConfiguration, TaskIdentity } from "./chat-configuration.js";
 import { isCleanupPolicy, type CleanupPolicy } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
@@ -29,12 +29,14 @@ export class CooperationController {
   private readonly bindings = new Map<string, Binding>();
   private active: { bindingId: string; session: BackgroundSession } | undefined;
   // One bounded readback receipt survives automatic disposal, not a conversation journal.
-  private completed: { task: TaskIdentity; sessionId: string; bindingId: string; turnId?: string; result?: BackgroundResult; policy: CleanupPolicy } | undefined;
+  private completed: { task: TaskIdentity; sessionId: string; bindingId: string; turnId?: string; result?: BackgroundResult; policy: CleanupPolicy; lastReply: ReplyDiagnostics | null } | undefined;
   private stopped = false;
 
   constructor(readonly configuration: ChatConfiguration, private readonly receipt: (bindingId: string) => unknown,
     private readonly createChat: (config: Readonly<ConfigurationSnapshot>) => BackgroundChatPort,
     private readonly now?: () => number) {}
+
+  hasActiveSession(): boolean { return this.active !== undefined; }
 
   prepare(owner: ComposerIdentity, snapshotId: string): Readonly<PreparedConfiguration> {
     this.check();
@@ -43,6 +45,13 @@ export class CooperationController {
   register(bindingId: string, owner: ComposerIdentity, config: Readonly<PreparedConfiguration>): void {
     this.check(); id(bindingId);
     if (this.bindings.has(bindingId)) throw new BridgeError("BINDING_EXISTS", "This submission is already registered.");
+    for (const [key, binding] of this.bindings) {
+      if (key === this.active?.bindingId) continue;
+      const sameOwner = "draftId" in owner ? "draftId" in binding.owner && owner.draftId === binding.owner.draftId
+        : !("draftId" in binding.owner) && sameTask(owner, binding.owner);
+      // Only replaced, definitely unsent drafts may be removed; preserve accepted or uncertain sends.
+      if (binding.ended || sameOwner && object(this.receipt(key)).state === "prepared") this.bindings.delete(key);
+    }
     if (this.bindings.size >= 128) throw new BridgeError("BINDING_LIMIT", "Reload the plugin after finishing active work to clear submission history.");
     this.bindings.set(bindingId, { owner: { ...owner }, config, ended: false });
   }
@@ -71,12 +80,16 @@ export class CooperationController {
       ? this.acceptedReceipt(bindingId!, task, false) : null;
     const pending = !owned ? [...this.bindings.entries()].reverse().find(([key, value]) => !value.ended
       && ("draftId" in value.owner || sameTask(task, value.owner)) && this.acceptedReceipt(key, task, false)?.state === "accepted") : undefined;
+    const activeState = owned ? active.status() : null;
+    const lastReply = activeState ? activeState.lastReply : this.completed && sameTask(task, this.completed.task)
+      && (bindingId === undefined || bindingId === this.completed.bindingId) ? this.completed.lastReply : null;
     return {
       task, submission, nextSettings: this.configuration.task(task),
       ...(turn ? { turn } : {}),
       connection: pending ? { state: "awaiting-executor", bindingId: pending[0], snapshotId: pending[1].config.id } : null,
       prepared: !turn && submission?.state === "accepted" ? binding?.config ?? null : null,
-      active: owned && !turn ? { sessionId: active.id, config: active.config, ...active.status() } : null,
+      active: owned && activeState && !turn ? { sessionId: active.id, config: active.config, ...activeState } : null,
+      lastReply: lastReply ? { ...lastReply } : null,
       occupied: !!active && !owned,
       // Readback carries a bounded reply instead of duplicating configuration/catalog data.
       models: turn ? [] : this.configuration.models(),
@@ -145,8 +158,9 @@ export class CooperationController {
     const active = this.owned(identity(input.task), id(input.sessionId));
     if (input.policy !== "retain" && !explicitUserEnd && !active.session.hasCompletedReport()) throw new BridgeError("COMPLETION_UNVERIFIED", "Report verified completion before automatic cleanup, or end in response to an explicit user request.");
     const completed = active.session.completedReply();
+    const lastReply = active.session.status().lastReply;
     await active.session.finish(input.policy);
-    this.completed = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy};
+    this.completed = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy,lastReply};
     const binding = this.bindings.get(active.bindingId);
     if (binding) binding.ended = true;
     if (this.active === active) this.active = undefined;

@@ -1,35 +1,56 @@
-# Troubleshooting Bridge vNext
+# Troubleshooting Bridge
 
-## `COMMAND_UNAVAILABLE` or `PLUGIN_NOT_RUNNING`
+Start with the diagnostic error code and whether a session is active. The task control being enabled does not prove that a Chat message was sent.
 
-Confirm the native Loader is running, the `dev.codex-chat-bridge` package is installed and enabled, and Loader reports a running lifecycle. Rebuild/installing a plugin package requires Loader's normal package install followed by `--reload`; changing Loader C# code requires a new native build and restart.
+## Startup and automatic recovery
 
-## `CHAT_CONFIGURATION_REQUIRED`
+`APP_UNSUPPORTED`, `CHAT_CONNECT_TIMEOUT`, or `CHAT_MODELS_UNAVAILABLE` during startup may mean the App has not mounted its services or loaded the catalog yet. Bridge 0.1.5 retries automatically with backoff, without reloading the App. `compatibility.backgroundRecovery` reports `connecting`, `retrying`, `ready`, or `deferred`, the attempt count, and time until the next check.
 
-The dedicated App Chat must use ChatGPT mode with Medium or High reasoning. Pro is deliberately rejected. Select Medium or High in the Chat UI and retry with a new session if automatic High selection cannot be verified.
+- `retrying`: wait for the next connection attempt, or use **Diagnose** for an immediate idle attempt.
+- `deferred`: an owned session is still present. Inspect its state and explicitly end or retain it before idle recovery.
+- Persistent `APP_UNSUPPORTED`: the installed App may have changed its internal interface; include App, Loader, and Bridge versions in a bug report.
 
-## `SEND_UNCERTAIN`
+Recovery never replays messages, changes models, or disposes of an active session.
 
-Bridge could not verify the prepared text/focus or confirm the exact sent user marker after Loader's one trusted Enter. It will not resend, even if another exchange is requested. Inspect the existing Chat without sending more messages; call `finish` only when identity remains valid. Do not assume a timeout means delivery failed.
+## Configuration and saved drafts
 
-## `REPLY_TIMEOUT`
+`CHAT_CONFIGURATION_REQUIRED`: select an available model and supported thinking level in Bridge settings. Pro is supported only when explicitly selected; it is never an automatic fallback. Reconnection can refresh a catalog, but cannot grant model access or recover exhausted quota.
 
-The user message was confirmed, but no unique stable reply candidate appeared in its response region before the deadline. The error contains only structural counters and state flags, not control labels, alert text, or message content. Retry reading with the identical saved payload within a bounded time budget; do not resend with a fresh ID. A plain prose response with no recognizable code/protocol object can time out rather than trigger repair.
+`CONTEXT_EXISTS`: an older plugin instance left instructions in the draft. Bridge preserves them and stops automatic preparation attempts. Use **Prepare fresh collaboration instructions** in the task menu when you want to replace that Bridge block, then submit normally. Do not reuse an old binding after reload.
 
-Do not diagnose this by querying the local Codex SQLite databases. Bridge markers found there are normally records of the Codex task invoking the command client; they are not evidence that the App Chat reply was persisted locally.
+`bundledSkill: loader-managed-unverified` is informational. Loader manages the skill; this field does not independently verify its installation. Read `bundledSkillNote` and Loader's skill status.
 
-## `SESSION_LOST`, `DOM_AMBIGUOUS`, or `RESTORE_REQUIRED`
+## Sending and reading
 
-These errors are intentional fail-closed stops. Do not click a guessed Chat or resend the turn. Return to the originating Codex task manually if necessary, call `finish` only with the matching session ID, and begin a fresh Bridge session after navigation, reload, or restart.
+`SEND_UNCERTAIN`: sending was not conclusively acknowledged. Keep the exact session/turn identities; do not assume nothing was sent or create a replacement request.
 
-## `CALL_BUSY`, `TURN_PENDING`, `TURN_CONFLICT`
+`CALL_BUSY`, `TURN_PENDING`, `TURN_CONFLICT`: wait for the owning tool process, then continue only with the identical saved payload. Changing a payload while retaining its turn ID is invalid.
 
-Wait for the current call before invoking again. A pending turn must be read with its original payload or finished before creating a new one. Changing the payload while retaining its ID is a caller error, not an instruction to resend.
+`repair-required` is an intermediate state, not a failed connection. The bundled waiter makes the single permitted format clarification. A second invalid reply returns `PROTOCOL_INVALID` and stops. `RESULT_TOO_LARGE` means the reply or result cannot fit the Windows command envelope; it is not permission to resend.
 
-## `COMPOSER_NOT_EMPTY`, `CHAT_BUSY`
+For lost output or `already-delivered`, use [read-only recovery](../skills/bridge-chat/references/protocol.md#read-only-result-recovery). Reconcile recovered actions with the actual tool ledger before executing anything again.
 
-Bridge preserves user drafts and will not submit while another generation is active. Resolve the draft or wait for generation to finish; do not clear input automatically. These errors do not themselves authorize a new session or another message.
+## Pauses and cleanup
 
-## `PROTOCOL_REPAIR_REQUIRED`, `PROTOCOL_INVALID`
+Total-wait expiry, `BUDGET_EXHAUSTED`, and `USER_CONFIRMATION_REQUIRED` require the corresponding task-panel consent. A late reply does not authorize continuation.
 
-The first invalid recognizable response permits one identical-payload invocation to send a repair request. Repair timeouts can continue reading the same payload. A second invalid response is terminal and no further exchanges will send. Multiple ambiguous DOM blocks stop immediately; do not choose whichever answer looks preferable.
+`USER_INTERVENED` or `SESSION_LOST`: preserve the Chat, inspect the state, and end or retain the exact owned session. Automatic recovery is not conversation recovery.
+
+`CLEANUP_UNSAFE`: generation or ownership is unresolved. Wait for it to settle or explicitly retain the Chat. `CLEANUP_PENDING` keeps the original native cleanup request in flight; a retry checks the same target rather than sending another delete. A failed cleanup does not invalidate an already verified reply.
+
+## Loader and helper
+
+`PLUGIN_NOT_RUNNING`: confirm that Loader is running and Bridge is installed and enabled. Use Loader's normal package installation and reload controls.
+
+`LOADER_ACCESS_DENIED`: the execution sandbox could not access the installed command client. Request normal tool approval for the same helper/payload; do not reinstall Loader or weaken directory permissions. `POWERSHELL_7_REQUIRED` means the helper was launched under Windows PowerShell 5.
+
+Do not use SQLite, extracted credentials, foreground clicks, or guessed CDP ports as alternative transports. Share only stable codes and structural diagnostics; remove private prompts, paths, task IDs, and credentials.
+
+## 中文速查
+
+- 启动时连接失败会自动退避恢复；`deferred` 表示活动会话尚未结束，需要先明确保留或结束。
+- 旧草稿说明用任务菜单“重新准备协作说明”处理，不自动改写草稿。
+- 不确定发送、超大回复和会话丢失不能通过换ID重发解决。
+- 预算、等待到期和用户问题仍需明确继续；恢复不会绕过这些条件。
+- Pro需要明确选择；`loader-managed-unverified`本身不是安装失败。
+- 详细调用与恢复方法见[协议说明](../skills/bridge-chat/references/protocol.md)。

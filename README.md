@@ -1,51 +1,128 @@
-# Bridge — background planning and execution
+# Bridge
 
-[![Bridge CI](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml)
+**Let Chat plan. Let Codex review, execute, and bring back evidence.**
 
-Bridge connects a user-selected **App Chat planner** to the **current Codex executor**. It keeps both model choices independent: Chat can plan and revise; Codex uses its existing tools and permissions to execute, verify and deliver.
+[![CI](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.1.5-blue)](docs/RELEASE-0.1.5.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Bridge 0.1.4** restores background Chat discovery after Codex moved its native services into the App entry bundle. It reuses the native model query, stream service and authenticated request client while retaining compatibility with the standalone client. See [release notes and validation scope](docs/RELEASE-0.1.4.md). Building this repository does not update an installed package. Historical changes remain documented in the [0.1.3 notes](docs/RELEASE-0.1.3.md), [0.1.2 notes](docs/RELEASE-0.1.2.md) and [0.1.1 notes](docs/RELEASE-0.1.1.md).
+English · [简体中文](README.zh-CN.md)
 
-## Runtime
+Bridge is a Windows [Codex Script Loader](https://github.com/JHees/codex-script-loader) plugin that connects a Chat model to your current Codex task. Choose a capable Chat planner—including an explicitly selected Pro model—and keep a fast Codex model for local code changes, tests, and verification. Plans and results travel between them automatically.
+
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Recovery](#automatic-recovery) · [Documentation](#documentation)
+
+## Preview
+
+![Bridge settings and task controls](docs/images/bridge-en.png)
+
+*Actual Bridge components rendered in an isolated preview. Model names, task content, and timing values are anonymous examples, not performance measurements or a screenshot of a personal workspace.*
+
+## Highlights
+
+- **Independent models.** Select Chat's model and thinking level without changing the Codex executor. Available choices come from your account's native catalog.
+- **Automatic feedback.** Chat proposes bounded steps; Codex reviews the instructions, performs approved work, and reports real evidence for the next decision.
+- **Background operation.** Keep working in the current task. Bridge uses the App-owned Chat client without typing into a Chat window.
+- **Startup recovery.** Waits for App services to become available, retries failed connections with backoff, and reconnects an invalid idle client.
+- **Visible control.** Editable submission instructions, remaining rounds, last-reply timing, and explicit pause/end controls.
+- **One package.** Renderer, `bridge-chat` skill, and PowerShell helper install and update together.
+
+## Quick start
+
+### Requirements
+
+- Windows with the Codex desktop app, signed in to an account with Chat access.
+- Native **Codex Script Loader 0.5.12+** for the complete UI experience.
+- PowerShell 7 for the bundled helper. Node.js is needed only for development.
+
+### Install
+
+1. Download a packaged `bridge-<version>.zip` from [Releases](https://github.com/JHees/chatgpt-codex-bridge/releases). Use the plugin ZIP, not GitHub's source archive.
+2. Install it through Loader's plugin manager and enable Bridge. The bundled skill is installed with it.
+3. Open **Bridge settings** and select a Chat model and thinking level. Defaults save automatically.
+4. Enable collaboration in the current task control, review the visible instructions, and send your request normally.
+
+Example request:
+
+> Review this module, propose the smallest fix, then guide Codex through implementation and tests. Codex should review each proposed action before executing it and report the evidence back.
+
+After the native submission is accepted, Codex connects to the selected Chat. Turning the switch on alone does not start a Chat request.
+
+## How it works
 
 ```text
-Current Codex task → bundled bridge-chat skill + PowerShell helper
-→ Loader command client → current-user named pipe
-→ Loader-owned CDP → Bridge renderer → App-owned Chat client
+Your request
+    ↓
+Chat: decide the next step and acceptance criteria
+    ↓
+Codex: review scope and permissions → execute → collect evidence
+    ↓
+Chat: inspect the results → revise or confirm completion
 ```
 
-Three allowlisted operations cover the workflow:
+Bridge uses three operations: `status`, `exchange`, and `finish`. A dedicated Chat stays bound to the originating task; repeated reads continue the same message instead of resending it. A planner's completion claim is checked against the executor's reported evidence before normal cleanup.
 
-- `status`: read native submission binding, frozen preparation, model catalog and current state.
-- `exchange`: send one structured business turn or continue reading that exact turn.
-- `finish`: end the owned session and explicitly delete, archive or retain its dedicated Chat. User-requested termination is separate from verified completion; a busy local read is interrupted without cancelling native generation.
+Chat does not acquire direct local-file or shell access through Bridge. Codex reads the requested files and returns the relevant evidence. Chat instructions remain subject to the executor's review and existing permissions.
 
-The App adapter discovers the current local resource graph and App-owned dependency scope. It sends and reads through the native Chat client, correlates messages and parent nodes, and checks ownership before cleanup. It does not navigate, focus a Chat textbox or request trusted Enter. It does not create a daemon, MCP server, webpage ChatGPT session, database writer, project reader or listening port.
+## Defaults and controls
 
-Discovery supports both the standalone Chat client and builds that bundle the native stream service, authenticated request client and normalized model query into the App entry module. Export aliases are resolved from their service relationships instead of fixed resource hashes. Unsupported or ambiguous services keep background collaboration unavailable; simulated compatibility tests do not replace a real Chat exchange on a new App build.
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| Collaboration | Off | Enable per task; preferences persist |
+| Chat model | Not selected | Select explicitly; no automatic model substitution |
+| Business rounds | 3 | Range 1–8; feedback and final verification count |
+| Read window | 90 seconds | Short reads continue without a new send |
+| Total reply wait | 15 minutes | Range 1–60 minutes; expiry pauses for consent |
+| Verified completion | Delete Chat | Retain or archive can be selected |
 
-## User controls
+The task menu shows remaining rounds and the last validated reply's duration and format-repair count. Duration includes waiting and pauses; it is not a model speed benchmark. Pro is used only when explicitly selected or inherited from a saved Pro preference.
 
-A Loader settings page saves defaults. A compact task control uses Loader's generic composer interface to prepare **visible, editable instructions** before normal native submission. Only an accepted, matching native receipt permits background collaboration. A configured switch is not proof that Codex has invoked Bridge.
+## Automatic recovery
 
-Defaults: off, no selected Chat model, 3 business rounds, 90-second read windows, 15-minute total reply wait, delete after verified completion. Thinking options come from the selected native model. Pro is explicit and never an automatic fallback. Task preferences persist under host/task identity; active sessions and frozen snapshots remain memory-only. Unknown existing tasks start disabled instead of inheriting an opt-in intended for new tasks.
+Version 0.1.5 fixes one-shot startup discovery: an App that is still mounting no longer leaves Bridge disconnected until a manual reload.
 
-Long replies use repeated short reads without resending or resetting their deadline. Deadline, user-input and batch-budget pauses require explicit task-panel consent. Chat responses remain untrusted intent; a planner's `complete` is not proof of local verification or user delivery.
+- Failed connection attempts retry after **1, 2, 5, 10, 30, then 60 seconds**, with later retries capped at 60 seconds.
+- Each discovery/catalog attempt has a **15-second timeout**. A healthy idle client is checked every **30 seconds**.
+- Partial UI startup is cleaned up before retrying. Concurrent manual and automatic checks share one connection attempt.
+- **An active session is preserved.** Recovery is deferred while it is owned, including an unresolved or failed session. Bridge never restarts that conversation or replays a message automatically.
+- Disabling or unloading the plugin cancels its recovery timers. A timed-out or stopped attempt cannot overwrite a newer connection.
 
-Read the [Chinese usage guide](docs/USAGE.md), [bundled protocol reference](skills/bridge-chat/references/protocol.md) and [architecture diagram](docs/bridge-redesign.architecture.html).
+If an active conversation loses its native client, inspect its error and end or retain it explicitly; idle reconnection can then proceed. Use **Diagnose** to request an immediate idle check. Unsupported App internals may still require a plugin update.
 
-## Installation and updates
+## Boundaries
 
-One ZIP contains the renderer and `skills/bridge-chat`, including the helper. Loader manages the skill with installation, updates and rollback. There is no second installation step.
+- One active collaboration per plugin instance. This release targets the native Windows Loader.
+- App Chat services are internal interfaces and can change with App updates.
+- Budget, deadline, and user-input pauses require explicit continuation. Recovery does not bypass them.
+- Reload restores preferences, not active sessions or message history. Saved draft instructions are preserved; use **Prepare fresh collaboration instructions** if they belong to an old instance.
+- Uncertain sends are not retried. Automatic deletion requires completion evidence, planner confirmation, and native ownership checks.
+- This project does not promise quota savings, faster completion, or equal behavior across all models. Pro quality and long unattended coding runs need separate evaluation.
 
-Use **native Windows Loader 0.5.12 or later** for the complete 0.1.4 experience, including folded drafts and two-way removal notifications. Loader 0.5.11 provides the base schema-v2 skill, settings/storage and native submission interfaces but lacks those UI extensions; older hosts fall back to visible instructions without reverse Remove synchronization. Check Bridge diagnostics before use; this plugin does not update Loader.
+## Documentation
 
-The update source remains [JHees/chatgpt-codex-bridge](https://github.com/JHees/chatgpt-codex-bridge). Stable releases use `bridge-{version}.zip` and its `.sha256`. Loader automatic replacement is opt-in; new permissions/local edits require confirmation. Main-branch CI artifacts are test packages, not Loader update releases. See [RELEASING.md](docs/RELEASING.md).
+- [0.1.5 release notes](docs/RELEASE-0.1.5.md)
+- [Detailed usage / 详细使用说明](docs/USAGE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Protocol and helper](skills/bridge-chat/references/protocol.md)
+- [Security model](docs/SECURITY_MODEL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Build and release](docs/RELEASING.md)
 
-## Development and acceptance
+## Development
 
-Run `npm run check` for typecheck, lint, tests, build and ZIP validation. Generated artifacts stay under `dist`; builds do not install, publish or change versions.
+Use Node.js 22.12+ and PowerShell 7:
 
-Live validation includes a three-round **GPT-5.6 Sol / Medium → GPT-5.6 Luna** research loop with actual source checks, evidence feedback, planner confirmation and final delivery. Earlier transport validation exercised verified deletion. Coding/failure-repair, Spark and Pro combinations remain unaccepted; this is not blanket support for every model/task. Pro generation tests need explicit authorization. CI uses simulated clients and clocks.
+```powershell
+npm ci
+npm run check
+```
 
-The old DOM implementation remains temporarily in source/tests pending replacement gates but is no longer imported by the entry or included in its runtime bundle. There is no foreground fallback.
+`check` runs type checking, lint, tests, build, and ZIP validation. Packages are written to `dist/`; building does not install them. Tests cover delayed startup, connection timeouts, idle reconnection, cleanup of partial registrations, active-session protection, protocol handling, and UI behavior. Simulated recovery tests do not replace a full cold-start test of a particular installed App build.
+
+For a useful bug report, include App/Loader/Bridge versions, the stable diagnostic error code, reproduction steps, and whether a session was active. Remove private prompts, credentials, task IDs, and local paths before sharing logs or screenshots.
+
+Contributions are welcome. Keep changes inside the generic Loader plugin interface, include a focused regression for behavior changes, and run `npm run check` before opening a pull request.
+
+## License
+
+[MIT](LICENSE). Third-party notices are included with the plugin package.

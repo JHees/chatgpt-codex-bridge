@@ -16,7 +16,7 @@ function fixture() {
 it("cleans its own style and settings when composer registration fails during startup", () => {
   const f = fixture();
   f.api.composer = { registerAccessory: () => { throw Error("COMPOSER_UNAVAILABLE"); } };
-  expect(() => start(f.api)).toThrow();
+  expect(() => start(f.api)).not.toThrow();
   expect(f.window.document.querySelectorAll("style")).toHaveLength(0);
   expect(f.unregistered()).toBe(1);
 });

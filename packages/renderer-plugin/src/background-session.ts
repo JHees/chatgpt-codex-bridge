@@ -1,6 +1,6 @@
 import { isCleanupPolicy, type CleanupPolicy, type ConfigurationSnapshot } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
-import { formatRepairPrompt, formatRequestPrompt, parseBridgeRequest, parseBridgeResponse, ProtocolError, type BridgeRequest, type BridgeResponse } from "./protocol.js";
+import { commandResponseBytes, formatRepairPrompt, formatRequestPrompt, parseBridgeRequest, parseBridgeResponse, ProtocolError, type BridgeRequest, type BridgeResponse } from "./protocol.js";
 
 /** An adapter must correlate message IDs, verify ownership and reject terminal stream errors. */
 export interface BackgroundChatPort {
@@ -20,7 +20,6 @@ interface Turn {
   response?: BridgeResponse;
   paused: boolean;
   repair: "none" | "required" | "sent";
-  repairReason?: string;
   source?: string;
   accounted?: boolean;
 }
@@ -28,6 +27,8 @@ export type BackgroundResult =
   | { state: "waiting" | "paused"; turnId: string; elapsedMs: number; allowedMs: number }
   | { state: "response"; response: BridgeResponse }
   | { state: "already-delivered" | "repair-required"; turnId: string };
+
+export interface ReplyDiagnostics { elapsedMs: number; repairCount: number; round: number }
 
 /** In-memory session engine. Construction requires an already accepted, frozen task binding. */
 export class BackgroundSession {
@@ -39,6 +40,7 @@ export class BackgroundSession {
   private enabled = true;
   private used = 0;
   private last: string | undefined;
+  private lastReply: ReplyDiagnostics | null = null;
   private awaitingUser = false;
   private cleanupFailed = false;
   private cleanupReason: string | null = null;
@@ -89,7 +91,7 @@ export class BackgroundSession {
         this.pending = request.turnId;
         // Register before sending. An uncertain send must never be attempted again.
         this.used++;
-        turn.messageId = await this.send(formatRequestPrompt(request));
+        turn.messageId = await this.send(formatRequestPrompt(request, this.config.settings.maxRounds - this.used));
         assertRunning();
       }
       if (this.now() >= turn.deadline) { turn.paused = true; return this.waitState(request.turnId, turn); }
@@ -113,18 +115,18 @@ export class BackgroundSession {
       if (result.state === "waiting") return this.waitState(request.turnId, turn);
       try {
         const response = parseBridgeResponse(result.text, this.id, request.turnId);
-        if (new TextEncoder().encode(JSON.stringify(response)).length > 60 * 1024) throw new BridgeError("RESULT_TOO_LARGE", "The reply exceeds the safe command response size.");
+        if (commandResponseBytes(response) > 48 * 1024) throw new BridgeError("RESULT_TOO_LARGE", "The reply exceeds the safe command response size after JSON escaping.");
         turn.response = response;
       }
       catch (error) {
         if (!(error instanceof ProtocolError)) throw error;
         if (turn.repair === "sent") throw new BridgeError("PROTOCOL_INVALID", `The response remains invalid after one repair: ${error.message}`);
         turn.repair = "required";
-        turn.repairReason = error.message;
         return { state: "repair-required", turnId: request.turnId };
       }
       this.pending = undefined;
       this.last = request.turnId;
+      this.lastReply = { elapsedMs: Math.max(0, this.now() - turn.startedAt), repairCount: turn.repair === "sent" ? 1 : 0, round: this.used };
       this.awaitingUser = turn.response.status === "needs_user";
       this.completedReport = turn.response.status === "complete" && request.state.phase === "complete"
         && request.state.completed.length > 0 && request.state.blockers.length === 0
@@ -168,6 +170,8 @@ export class BackgroundSession {
     return {
       state: this.cleanupFailed ? "cleanup-failed" : this.endRequested ? "ending" : this.terminal ? "failed" : this.awaitingUser ? "needs-user" : deadlineReached ? "paused" : turn?.repair === "required" ? "repair-required" : turn ? "waiting" : response?.status === "complete" ? "awaiting-verification" : response ? "actions-returned" : "ready",
       usedRounds: this.used, maxRounds: this.config.settings.maxRounds, busy: this.busy,
+      remainingRounds: Math.max(0, this.config.settings.maxRounds - this.used),
+      lastReply: this.lastReply ? { ...this.lastReply } : null,
       errorCode: this.cleanupFailed ? "CLEANUP_FAILED" : this.terminal?.code ?? null,
       cleanupReason: this.cleanupReason,
       titleError: this.chat.diagnostics?.().titleError ?? null,
@@ -175,7 +179,7 @@ export class BackgroundSession {
       ...(turn ? { turnId: this.pending, elapsedMs: Math.max(0, this.now() - turn.startedAt), allowedMs: turn.deadline - turn.startedAt, repair: turn.repair } : {}),
     };
   }
-  stop(): void { this.stopped = true; this.readAbort?.abort(); this.chat.dispose?.(); this.turns.clear(); }
+  stop(): void { this.stopped = true; this.readAbort?.abort(); this.chat.dispose?.(); this.turns.clear(); this.lastReply = null; }
 
   allowNextBatch(): void {
     if (this.stopped || this.terminal) throw new BridgeError("SESSION_LOST", "This session cannot continue.");

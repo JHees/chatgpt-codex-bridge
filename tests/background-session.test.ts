@@ -95,6 +95,7 @@ it("exposes a recoverable repair state and reads the same repaired turn without 
   expect((await f.session.exchange(f.request)).state).toBe("response");
   expect(f.sent).toHaveLength(2);
   expect(f.session.status()).toMatchObject({state:"actions-returned",usedRounds:1});
+  expect(f.session.status()).toMatchObject({ lastReply: { elapsedMs: 180_000, repairCount: 1, round: 1 } });
   expect((await f.session.exchange(f.request)).state).toBe("already-delivered");
   expect(f.sent).toHaveLength(2);
 });
@@ -104,13 +105,40 @@ it("enforces batch budget without counting reads and allows another batch only t
   for (let i = 1; i <= 3; i++) {
     f.reply(`turn-${i}`);
     await f.session.exchange({ ...f.request, turnId: `turn-${i}`, ...(i === 1 ? {} : { kind: "result", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Checked", evidence: ["Verified source"] }] }) }, i === 1 ? undefined : `turn-${i - 1}`);
+    expect(f.session.status()).toMatchObject({ remainingRounds: 3 - i, lastReply: { round: i, repairCount: 0 } });
   }
   const next = { ...f.request, turnId: "turn-4", kind: "result", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Checked", evidence: ["Verified source"] }] };
   await expect(f.session.exchange(next, "turn-3")).rejects.toMatchObject({ code: "BUDGET_EXHAUSTED" });
   expect(f.sent).toHaveLength(3);
   f.session.allowNextBatch();
+  expect(f.session.status()).toMatchObject({ remainingRounds: 3 });
   f.reply("turn-4");
   expect((await f.session.exchange(next, "turn-3")).state).toBe("response");
+});
+
+it("freezes only the last validated reply diagnostics while later reads are pending and clears them on stop", async () => {
+  const f = fixture();
+  expect(f.session.status()).toMatchObject({ lastReply: null });
+  f.reply(); await f.session.exchange(f.request);
+  expect(f.session.status()).toMatchObject({ lastReply: { elapsedMs: 90_000, repairCount: 0, round: 1 } });
+  f.advance(5000);
+  expect(f.session.status()).toMatchObject({ lastReply: { elapsedMs: 90_000 } });
+  const status = f.session.status();
+  if (!status.lastReply) throw Error("Missing diagnostics");
+  status.lastReply.elapsedMs = -1;
+  f.raw("invalid reply");
+  await f.session.exchange({ ...f.request, kind: "result", turnId: "turn-2", actionResults: [{ actionId: "a1", outcome: "succeeded", summary: "Checked", evidence: ["Source"] }] }, "turn-1");
+  expect(f.session.status()).toMatchObject({ lastReply: { elapsedMs: 90_000, repairCount: 0, round: 1 } });
+  expect(Object.keys(f.session.status().lastReply!).sort()).toEqual(["elapsedMs", "repairCount", "round"]);
+  f.session.stop();
+  expect(f.session.status()).toMatchObject({ lastReply: null });
+});
+
+it("rejects a reply that would overflow the Windows command envelope after Unicode escaping", async () => {
+  const f=fixture(); f.raw("协作状态：继续\n"+"中".repeat(8000));
+  await expect(f.session.exchange(f.request)).rejects.toMatchObject({code:"RESULT_TOO_LARGE"});
+  expect(f.sent).toHaveLength(1);
+  expect(f.session.status()).toMatchObject({lastReply:null,state:"failed"});
 });
 
 it("rejects unrelated, missing or duplicate action results before sending another turn", async () => {

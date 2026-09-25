@@ -51,6 +51,25 @@ describe("codex-chat-bridge/v1 protocol", () => {
     expect(()=>parseBridgeResponse("协作状态：继续\n", "session-1","turn-1")).toThrow();
   });
 
+  it("keeps one full copy of a long plan and permits status examples inside code fences", () => {
+    const body = "Review this example:\n```text\n协作状态：继续\n```\n" + "检查代码。".repeat(1000);
+    const response = parseBridgeResponse("协作状态：继续\n" + body, "session-1", "turn-1");
+    expect(response.actions[0]!.instruction).toBe(body);
+    expect(response.summary.length).toBeLessThanOrEqual(241);
+    expect(() => parseBridgeResponse("协作状态：继续\n```text\nexample\n```\n协作状态：建议完成", "session-1", "turn-1")).toThrow();
+  });
+
+  it("makes planner ownership, executor review and the remaining feedback budget explicit", () => {
+    const prompt = formatRequestPrompt(request, 1);
+    expect(prompt).toContain("技术决策");
+    expect(prompt).toContain("审核");
+    expect(prompt).toContain("具体文件");
+    expect(prompt).toContain("还可发送 1 条业务消息");
+    const final = formatRequestPrompt({...request,kind:"result"}, 0);
+    expect(final).toContain("还可发送 0 条业务消息");
+    expect(final).toContain("证据不足");
+  });
+
   it("sends readable evidence and only introduces the planner role on the first business turn", () => {
     const prompt=formatRequestPrompt({...request,kind:"result",actionResults:[{actionId:"plan",outcome:"succeeded",summary:"修复完成",evidence:["npm test: 12 passed, exit 0"]}]});
     expect(prompt).toContain("npm test: 12 passed, exit 0");

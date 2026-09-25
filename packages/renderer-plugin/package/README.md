@@ -1,22 +1,23 @@
-# Codex App Chat Bridge
+# Bridge 0.1.5
 
-这是 Bridge 0.1.4 后台协作插件包，修复 Codex 将原生 Chat 服务移入主程序后无法发现后台接口的问题，复用原生模型目录、流处理和认证请求客户端，并保留旧版独立客户端兼容路径。此次已验证模型目录读取与候选热加载；新版真实消息往返、改名及结束清理尚未实测。此前版本的 Sol「中」→ Luna 三轮资料调研闭环记录保留，不作为此次兼容修复的实机往返验收。
+English · [简体中文](https://github.com/JHees/chatgpt-codex-bridge/blob/main/README.zh-CN.md)
 
-Bridge 将用户选择的 App Chat 规划模型与当前 Codex 执行模型连接起来。后台收发不切换页面，不修改 Codex 模型。支持 `status`、`exchange`、`finish` 三个受控操作；没有前台点击回退、MCP 服务或常驻进程。
+Connect a selected App Chat planner to the current Codex executor. Chat leads technical decisions; Codex reviews proposed actions, executes with its existing permissions, and returns evidence.
 
-## 一次安装
+## Install and use
 
-使用 Windows Loader **0.5.12 或更高兼容版本**获得完整折叠与双向联动体验。0.5.11 仅提供基础 schema-v2 随包 skill、设置存储与页面导航、输入区控件、可见上下文及原生提交回执，不支持新增的折叠通知。renderer、`bridge-chat` skill 与调用脚本同包更新和回滚，不另装 skill。请先更新 Loader，再检查 Bridge 诊断；本插件不会自行升级 Loader。
+Use native Windows Codex Script Loader 0.5.12+ and PowerShell 7. Install this ZIP through Loader; the renderer and `bridge-chat` skill are managed together. Choose a model in Bridge settings, enable collaboration for the task, review the visible instructions, and submit normally.
 
-权限：`dom`、`local-storage`、`settings`、`composer`、`agent-skills`。不再申请 `trusted-input`。新增权限应由 Loader 安装／更新确认页明确展示。
+0.1.5 adds delayed-start and idle-connection recovery with bounded attempts and backoff. Active sessions are preserved; uncertain messages are never replayed. The task menu shows remaining rounds and last-reply statistics. Default budget is 3 business rounds, including final feedback.
 
-## 使用
+[Full English documentation](https://github.com/JHees/chatgpt-codex-bridge#readme) · [Release notes](https://github.com/JHees/chatgpt-codex-bridge/blob/main/docs/RELEASE-0.1.5.md)
 
-1. 在 Loader 的 Bridge 设置页选择默认模型／模式与思考程度。默认关闭协作，未选择模型；Pro 必须明确选择。
-2. 在任务输入区控制面板启用协作，说明默认收起，可展开查看后正常提交。移除说明会关闭协作，关闭协作也会清除说明；已发送消息内的独立说明同样可折叠。只有原生提交回执确认了任务，Codex 才能调用后台 Chat。
-3. 同一协作复用专用 Chat。分段读取不重发；达到等待期限、批次预算或需要用户时暂停，通过任务面板明确继续。
-4. Codex 回报真实执行证据并核对交付条件；正常完成默认删除专用 Chat，也可明确选择归档或保留。用户介入或生成未完成时不删除或归档。用户主动结束可中断本地等待；只说“结束”时保留 Chat。
+## 中文说明
 
-运行中的模型、预算与等待参数被冻结；设置变更只用于下次协作。关闭开关不撤回已发送数据，也不停止 Codex 工具。重载后状态重置，不恢复或清扫历史会话。
+Bridge 把所选 Chat 规划模型连接到当前 Codex 执行任务。Chat 主导技术决策，Codex 审核后按现有权限执行并回传证据。
 
-更新源：[JHees/chatgpt-codex-bridge](https://github.com/JHees/chatgpt-codex-bridge/releases)。自动更新由 Loader 管理且默认关闭。当前候选源码的四种 Spark／Luna 与非 Pro／Pro 实机组合尚未全部验收，不能据此宣称全面支持。
+需要原生 Windows Loader 0.5.12+ 与 PowerShell 7。通过 Loader 安装整个 ZIP，renderer 与 skill 一起管理。在 Bridge 设置中选好模型，在当前任务开启协作，检查可见说明后正常提交。
+
+0.1.5 增加启动延迟和空闲连接失效的自动恢复，带超时及退避。活动会话保留，不自动重发不确定消息。任务菜单提供剩余轮次和最近回复统计；默认3轮包含最终反馈。重载只恢复偏好，不恢复活动会话；有旧草稿说明时可明确选择重新准备。
+
+[完整中文文档](https://github.com/JHees/chatgpt-codex-bridge/blob/main/README.zh-CN.md)

@@ -154,6 +154,14 @@ it("allows normal cleanup only after a completed local report and a matching pla
     .toMatchObject({state:"response",response:{status:"complete"}});
   await expect(f.controller.finish({ task: f.task, sessionId: "session-a", policy: "delete" })).resolves.toEqual({ state: "ended", policy: "delete" });
   expect(deleted).toBe(true);
+  const status = f.controller.status({task:f.task});
+  expect(status.lastReply).toEqual({ elapsedMs: expect.any(Number), repairCount: 0, round: 1 });
+  expect(f.controller.status({task:{...f.task,taskId:"other"}}).lastReply).toBeNull();
+  expect(f.controller.status({task:f.task,bindingId:"other"}).lastReply).toBeNull();
+  if (!status.lastReply) throw Error("Missing diagnostics");
+  status.lastReply.round = 99;
+  expect(f.controller.status({task:f.task}).lastReply?.round).toBe(1);
+  expect(fixture().controller.status({task:f.task}).lastReply).toBeNull();
 });
 
 it("preserves the final reply and cleanup reason when automatic cleanup fails; explicit retry succeeds", async () => {
@@ -172,6 +180,19 @@ it("rejects attempts to grant consent through command payloads", async () => {
   await expect(f.controller.exchange({ ...f.payload, allowNextBatch: true })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
   expect(() => f.controller.status({ task: f.task, continueWaiting: true })).toThrow();
   expect(f.sends).toHaveLength(0);
+});
+
+it("replaces unsent preparations without exhausting bindings or dropping accepted and uncertain submissions", async () => {
+  const f=fixture();
+  const controller = new CooperationController(f.config, bindingId=>({state:bindingId==="binding-a"?"accepted":bindingId==="dispatched"?"dispatched":"prepared",bindingId,...f.task,turnId:"native-turn"}),()=>f.port);
+  controller.register("binding-a",f.task,controller.prepare(f.task,"snapshot-a"));
+  controller.register("dispatched",f.task,controller.prepare(f.task,"snapshot-pending"));
+  for(let i=0;i<150;i++) {
+    controller.register(`editing-${i}`,f.task,controller.prepare(f.task,`snapshot-${i}`));
+  }
+  expect(controller.status({task:f.task,bindingId:"binding-a"}).submission?.state).toBe("accepted");
+  expect(controller.status({task:f.task,bindingId:"editing-149"}).prepared).toBeNull();
+  await expect(controller.exchange({...f.payload,bindingId:"dispatched",snapshotId:"snapshot-pending"})).rejects.toMatchObject({code:"SUBMISSION_UNCONFIRMED"});
 });
 
 it("closes a two-turn human planning loop automatically and preserves its final recovery receipt", async () => {

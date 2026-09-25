@@ -12,6 +12,7 @@ Public operations remain status, exchange and finish. Loader validates the rende
 - Cooperation controller: owns task binding, the single session and automatic finish after executor completion plus planner confirmation. One final completion receipt remains readable; it is not a historical journal.
 - Background session: owns immutable turns, action/result accounting, budget, read windows, cumulative deadline and one clarification. UI consent is not a host-command option.
 - App Chat adapter: discovers native assets and dependency scope; sends and reads via native message IDs, parent nodes and stream completion. It labels the owned Chat and verifies ownership before deletion.
+- Entry lifecycle: bounds service discovery/catalog loading, retries startup with backoff, and checks idle client identity. Partial UI registration is cleaned before retry. Recovery preserves the controller and bindings; an active session defers it. Stop cancels timers and invalidates in-flight attempts.
 
 ## Communication and persistence
 
@@ -23,4 +24,4 @@ Only preferences persist. Accepted Bridge submissions transfer new draft prefere
 
 Completion report plus Chat confirmation triggers configured cleanup. Generation, user intervention and uncertain ownership prevent automatic deletion. Cleanup failure preserves the target and reason; lost command output does not lose the latest automatic-completion reply. Reload never restores requests or scans historical Chats.
 
-No foreground Chat navigation, trusted Enter, database writes, webpage ChatGPT, daemon, MCP server, tunnel, worker or listening port participates. Old DOM modules remain inactive pending replacement acceptance; the production entry does not import them.
+No foreground Chat navigation, trusted Enter, database writes, webpage ChatGPT, daemon, MCP server, tunnel, worker or listening port participates. The retired DOM adapter and controller have been removed.

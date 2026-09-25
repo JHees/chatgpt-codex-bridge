@@ -15,5 +15,7 @@ Thumbs.db
 
 # Runtime state belongs under %LOCALAPPDATA%, never in Git.
 .runtime/
+output/playwright/
+.playwright-cli/
 config/settings.json
 secrets/

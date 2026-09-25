@@ -3,8 +3,16 @@ import { spawnSync } from "node:child_process";
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { commandResponseBytes } from "../packages/renderer-plugin/src/protocol.js";
 
 const quote = (text: string): string => `'${text.replaceAll("'", "''")}'`;
+
+it.skipIf(process.platform !== "win32")("budgets at least the actual Windows JSON encoder size for Unicode and escaped text", () => {
+  const sample={text:'中😀<>+&`"\'\\\n'+String.fromCharCode(...Array.from({length:128},(_,i)=>i))};
+  const result=spawnSync(pwsh,["-NoProfile","-Command",'[Console]::InputEncoding=[Text.UTF8Encoding]::new(); $value=[System.Text.Json.JsonDocument]::Parse([Console]::In.ReadToEnd()); [System.Text.Json.JsonSerializer]::Serialize[System.Text.Json.JsonElement]($value.RootElement)'],{encoding:"utf8",input:JSON.stringify(sample),timeout:10000,windowsHide:true});
+  expect(result.status).toBe(0);
+  expect(commandResponseBytes(sample)).toBeGreaterThanOrEqual(Buffer.byteLength(result.stdout.trim(),"utf8"));
+});
 
 it.skipIf(process.platform !== "win32")("waits through short windows and repair, but stops at pause, errors and lost transport", () => {
   const runner = resolve("skills/bridge-chat/scripts/wait-turn.ps1");

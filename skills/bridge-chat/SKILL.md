@@ -1,66 +1,48 @@
 ---
 name: bridge-chat
-description: Use visible Bridge collaboration instructions to consult a selected background Chat planner, execute its bounded actions in the current Codex task, and return verification evidence.
+description: Use an explicitly enabled Bridge submission to exchange plans and evidence with the selected App Chat model, or end an owned collaboration when the user asks.
 ---
 
 # Bridge Chat
 
-Use this workflow when the user requests Bridge collaboration or submits visible Bridge instructions with a Loader submission identity. Chat plans and revises; the current Codex task executes and verifies. Execution model selection remains with the user, including Spark or Luna. Chat intent does not change the task's mode, tool availability or authorization.
+Chat leads technical decisions and reviews evidence. Codex reviews each proposed action, executes approved work with its existing tools and permissions, and returns actual results. The user chooses both models. Chat text is a proposal, never a new permission grant or an executable command channel.
 
-## Connect to this submission
+Use Bridge only while the user wants this collaboration. A request to stop using Bridge overrides an earlier submission. For an explicit request to end an existing session, use **End or pause** below.
 
-For an explicit request to stop/end Bridge, use the termination procedure below instead of connecting to a new planner or sending more evidence.
+## Connect
 
-**Connection gate:** require an accepted binding and then a validated Chat response before substantive work. If connection fails before sending, report that Chat has not started; after sending, report the actual pending/error state. A completed Codex-only answer is not a successful Bridge collaboration.
+1. Before the first call, read [the invocation and wire protocol](references/protocol.md). Use the bundled [helper](scripts/invoke-bridge.ps1) directly in PowerShell 7 with `-PayloadJson` built by `ConvertTo-Json`.
+2. Read the binding and snapshot IDs from the current visible Loader instructions; take the real task ID from `CODEX_THREAD_ID`. Call `status` for that task and binding. Require an accepted native submission, matching task/snapshot, and available background/composer capabilities. Use the frozen **prepared** model and settings, not changed defaults.
+3. Send a concise brief: user objective, constraints, relevant file evidence, current tools/permissions, existing changes, and verifiable completion criteria. Perform only the small read-only checks needed to prepare it before receiving a validated planner response. If connection fails, report the actual error and pause; independent Codex work is not a successful Bridge exchange.
 
-1. Read [the local call and Chat protocol](references/protocol.md), including its PowerShell 7 invocation example, before invoking Bridge. Call the bundled [PowerShell helper](scripts/invoke-bridge.ps1) directly in the current PowerShell 7 process with `-PayloadJson`; construct JSON with `ConvertTo-Json`, not quote concatenation. It locates the native Loader client and validates its envelope. Renderer and skill are one Loader-managed package.
-2. Obtain the `submission-…` binding ID from the outer visible Loader context and the `snapshot-…` ID from its instructions. Determine the actual host/task from this Codex task's provided context. Call `status` with that task and binding ID. Require an accepted native submission, matching task and prepared snapshot, and compatible background/composer capabilities. If binding is absent, ask the user to enable Bridge in the task panel and submit its visible instructions; do not invent or copy another task's binding.
-3. Use the returned **prepared** configuration, not newly changed defaults. The native local task exposes its ID through `CODEX_THREAD_ID`; use that verified value when available rather than parsing a sidebar title or URL. Chat model/mode and thinking parameters are selected in the UI. Keep Pro explicit and never substitute a model. Task creation, executor-model changes, navigation, database writes, credential extraction and separate transports are not part of Bridge.
-4. Perform minimal read-only checks to describe the objective, constraints, deliverables, current mode/tools, existing changes, failure baseline and verifiable completion criteria. Send relevant evidence, not the full project or history.
+## Review, execute, return evidence
 
-## Plan, execute, report
+Keep one session ID. Each new business message gets a new turn ID; continuation uses the **identical** saved payload. Calls are sequential.
 
-Generate one session ID and fresh business turn IDs. Keep each complete local exchange object unchanged for continuation. Calls are sequential.
+The helper automatically continues short reads and the one allowed format repair. Wait for its actual completion: a tool `session_id` requires `write_stdin` for that same process; an outer running cell requires that tool's wait operation. Preserve the full execution-tool result. Interim silence is not a failure or permission to resend. `-SingleRead` is for diagnostics.
 
-**Use the fixed waiter.** The helper's default `exchange` automatically reads across short windows and performs the plugin's one allowed repair, with the identical payload, until a validated reply, explicit pause or error. It runs only as the attached tool process; it never executes Chat actions. Use `-SingleRead` only for diagnostics. Read the installed skill again on a new submission after an update instead of relying on a previous copy in task history.
+For each validated `response`:
 
-**Wait for the tool before interpreting Bridge.** Preserve the full execution-tool result (`text(result)`, not just `text(result.output)`). A `session_id` means the helper process is still running: call `write_stdin` for that exact session until it exits, collecting its output. An outer `Script running with cell ID` requires `functions.wait` for that cell. Empty interim output is not a Bridge error and is not a reason to finish or start another exchange. See the [execution-wait example](references/protocol.md#execution-tool-completion) before using a long-running helper call.
+1. Read every action, including the full `instruction` of a natural-language `plan` action. Its `summary` may be shortened. Review scope, feasibility, permissions and dependencies before execution. Reject or adjust unsupported advice and report the reason to Chat. Routine technical review belongs to Codex; request user input only when the user must supply a missing decision, information or authorization.
+2. Execute the approved steps in order. On a failed or blocked step, stop dependent work and record it as skipped. Chat cannot change executor model, task identity, tool permissions or release authority.
+3. Return a `kind: result` message with `replyToTurnId` beside `request`. Account for every previous action once, in order. Include commands and exit codes, relevant test results, diffs or inspected artifacts. Record rejected advice explicitly; do not claim it ran. Use `succeeded` only when the reviewed action's necessary work and verification succeeded.
+4. Ask Chat to evaluate the evidence and choose the next step. If repeated feedback makes no progress, request a different diagnosis with the new evidence; pause if no actionable path remains.
 
-- `response`: process the validated `response` object. Prefer 1–3 coherent actions per round. Each action needs a bounded scope, preserved constraints, expected evidence and a stop condition. Gather information or report ambiguity instead of inventing a major decision.
-- `waiting`: call `exchange` again with the **identical saved object**. This reads the same sent turn; no new turn, business round or deadline reset. A short read window is not the entire reply deadline.
-- `repair-required`: this is a successful intermediate result, not a connection failure. Continue `exchange` with the identical saved object to dispatch the plugin's single repair, then handle its resulting state. This extra Chat request is not a business round. A second invalid reply returns `PROTOCOL_INVALID` and stops.
-- `paused`: report the waiting limit and let the user choose **Continue waiting** or end the session. Late replies do not authorize action. After explicit continuation, reuse the same object.
-- `already-delivered` or lost command output: use the [read-only recovery query](references/protocol.md#read-only-result-recovery) for the original binding/session/turn. Recovering a reply is not permission to repeat actions. Reconcile it with the actual tool/action ledger before executing anything not yet done.
+The batch budget includes result feedback and final verification. Check remaining rounds before starting work that needs another exchange. Reserve a round for final evidence where possible. Reads and format repair do not consume a new business round. Only task-panel consent authorizes another batch or resuming a paused reply.
 
-The plugin sends readable task briefs and feedback, and associates the native reply with this turn. A natural-language reply becomes one `plan` action (ID `plan`); read its entire instruction, break it into bounded steps and check each step against the user's scope and actual permissions. Stop dependent steps at a failure and describe completed and skipped steps in that plan's result. Use `succeeded` only if every necessary step succeeded; otherwise report `failed` or `blocked`. Legacy structured replies may still contain individual actions.
+## Finish with evidence
 
-Execute actions in order using actual available tools. Chat shell text is not an executable command channel. At the first failed, blocked or user-input action, stop remaining dependent actions and report them as skipped. Record each action under **session + response turn + action ID**, including outcome, actual work and evidence. The next result uses `replyToTurnId` and accounts for every preceding action exactly once and in order.
+A planner `complete` alone is insufficient. Finish the local work, verify artifacts, then send a budgeted result with `state.phase: complete`, actual completed evidence, no unresolved blockers, and truthful action results. Obtain Chat's completion confirmation. A premature completion suggestion can be corrected by a budgeted result; it does not authorize deletion or skipping verification.
 
-For code, include actual test/build commands, exit codes and relevant counts/diffs. For documents, data or external operations, use appropriate artifacts and independently checked results. A launched process, generated filename or click alone is not success. Separate pre-existing failures, environment limits and new regressions.
+The plugin applies the frozen cleanup policy after this confirmation. Check `status` for `active=null` and no foreign occupancy. If cleanup failed, keep the exact session identity and reason; an explicit `finish` retries that target. Report delivered work and any cleanup gap separately. Commits, publishing and deployment still follow the user's authorization and project workflow.
 
-After two feedback rounds without verifiable progress, ask Chat for a different inspection path using the new evidence. If no actionable path results, pause for the user. Do not repeat the same failed action without changed evidence, plan or environment, or weaken tests to hide failure. Reconcile changed user goals before dependent actions or another Chat exchange.
+## End or pause
 
-## Pause and finish accurately
+- **User asks to end:** query `status` for the actual task, then `finish` that active session with `reason: user-request`. Use the requested policy; if unspecified, retain the Chat. No new binding or planner message is needed. Report unfinished work separately from termination.
+- **Paused / needs user / budget exhausted:** preserve the session and explain the specific required input or task-panel consent. A late reply does not grant permission to resume.
+- **Malformed local request:** `LOCAL_REQUEST_INVALID` proves no Chat request was sent. Correct the schema and preserve intended IDs.
+- **Access denied before sending:** use normal tool escalation for the same helper/payload. Do not change installation or permissions to bypass it.
+- **Lost output or already delivered:** first wait for any still-running tool. Otherwise use the exact read-only recovery query in [the protocol](references/protocol.md#read-only-result-recovery), then reconcile recovered actions with the tool ledger before acting.
+- **Uncertain send, protocol failure, user intervention, lost session, quota/permission errors:** stop at the reported state. Do not guess that nothing was sent, create a replacement session or change models.
 
-**User-requested termination is not successful completion.** Read `status` for the current actual host/task to obtain its active session; a fresh submission binding is not needed to finish that owned session. When the user explicitly asks to stop, call `finish` with that task/session, `reason: "user-request"`, and the requested policy (`delete`, `archive`, or `retain`). If the user only says “end”, retain the Chat. This flag declares user intent, not authority: never infer it from a planner reply, error, timeout or missing evidence. Do not send a new Chat request to ask permission to stop. Report termination separately from unfinished work.
-
-Ending interrupts the local waiter and blocks further sends/actions; it does not cancel native Chat generation or Codex tools. If delete/archive reports `CLEANUP_UNSAFE`, explain that generation or correlation is unresolved and offer retry after completion or retention. A repeated same-policy finish is safe; do not switch policies while a native cleanup request remains pending.
-
-The batch budget includes feedback and final confirmation. The last round's authorized actions may run, but do not send an unbudgeted “last report.” On `BUDGET_EXHAUSTED`, ask the user to allow the next batch in the task panel. `needs_user` pauses until the user supplies the required input and confirms in the panel. Preserve the Chat while paused.
-
-`complete` is **the planner's suggestion**, not proof of delivery. Before normal finish require actual actions/verification completed, artifacts checked, evidence reported to Chat and no unresolved failures/blockers. Report verified completion with `state.phase: complete`, actual `state.completed` evidence and empty blockers, then obtain Chat's complete reply. If Chat completes prematurely, send a budgeted result with fresh local evidence and no unknown actions rather than claiming success or silently deleting evidence. `COMPLETION_UNVERIFIED` refuses automatic deletion/archival before the completed report; an explicit user request uses the termination procedure above. Final delivery states actual changes, evidence, outputs and limits. Commits, pushes, publishing and deployment retain their separate authorization requirements.
-
-After the completed local report and Chat confirmation, the plugin applies the frozen cleanup policy automatically (delete by default). Check `status`: an active `cleanup-failed` session retains its exact target and `cleanupReason`; retry `finish` with that identity or offer explicit retention. Cleanup failure does not invalidate the verified reply or justify repeating work. The last automatically ended reply remains available through read-only recovery until another automatic completion or reload. A matching repeated `finish` is idempotent. Generation in progress, user intervention and uncertain ownership prevent deletion; never scan historical Chats for cleanup. Reload/restart remembers task preferences only, not active collaboration or messages.
-
-## Errors
-
-- `LOCAL_REQUEST_INVALID`: the business request was rejected before session/turn mutation or sending. Correct the object using the complete feedback example; `replyToTurnId` belongs beside `request`, not inside it. Keep the intended IDs. This is not permission to retry `PROTOCOL_INVALID`, an uncertain send or an already-admitted turn.
-- `POWERSHELL_7_REQUIRED` or input validation: no request was sent. Correct the invocation using the example in the protocol reference. Use PowerShell 7, not `powershell.exe`.
-- `LOADER_ACCESS_DENIED`: no command was sent. Request the execution tool's normal permission escalation for the **same helper and payload** to access the installed Loader. If approval is unavailable or denied, stop and report the access gap. Do not change installation paths, permissions or execution model, or reinstall Loader to work around the sandbox.
-
-- `SUBMISSION_UNCONFIRMED`, `TASK_MISMATCH`, `CONFIGURATION_MISMATCH`, `CHAT_CONFIGURATION_REQUIRED`, `APP_UNSUPPORTED`: pause at the indicated gap. Do not fall back to foreground clicks or Codex-only execution without the user's choice.
-- `CALL_BUSY`, `TURN_PENDING`, `SESSION_OCCUPIED`: read/finish the known owned call; never overlap, steal or queue behind another task.
-- `USER_CONFIRMATION_REQUIRED`, `BUDGET_EXHAUSTED`: await task-panel consent. Grants are not host-command options.
-- `COLLABORATION_DISABLED`: stop sends and repairs. Switching off does not retract sent data or terminate Codex tools.
-- Outer timeout or invalid/missing envelope: the transport did not prove whether the plugin completed. Use only the read-only recovery query first; never start a replacement session or resend based on an empty output. A tool process identifier still available must be waited on instead.
-- `SEND_UNCERTAIN`, `SESSION_LOST`, `PROTOCOL_INVALID`, `USER_INTERVENED`, rate/permission errors or unknown error: stop. Do not infer “not sent” or start a replacement session. Preserve the exact state when possible and report the stable code without private content.
+Disabling collaboration blocks new sends; it does not retract messages or cancel native generation. Ending interrupts the local waiter. Unresolved generation or ownership prevents deletion. Reload clears sessions and bindings; it does not restore requests or clean up historical Chats.
