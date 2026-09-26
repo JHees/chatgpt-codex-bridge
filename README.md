@@ -24,6 +24,8 @@ Chat breaks down the task, proposes changes, and reviews the results. Codex revi
 
 ## Get started
 
+Bridge 0.1.6 supports and has been verified with **Codex 26.924.1866.0 on Windows**. See the [release notes](docs/RELEASE-0.1.6.md) for compatibility fixes and validation scope.
+
 Requires Windows, the Codex desktop app with Chat access, **Codex Script Loader 0.5.12+**, and **PowerShell 7**.
 
 1. Download `bridge-<version>.zip` from [Releases](https://github.com/JHees/chatgpt-codex-bridge/releases), then install and enable it in Loader.

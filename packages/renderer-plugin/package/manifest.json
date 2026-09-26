@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "dev.codex-chat-bridge",
   "name": "Codex App Chat Bridge",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Structured, single-session collaboration through Chat inside the Codex desktop app.",
   "author": "ChatGPT Codex Bridge contributors",
   "scope": "renderer",

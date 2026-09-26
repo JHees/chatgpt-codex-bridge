@@ -34,6 +34,20 @@ it("discovers bundled native services and reads the native normalized model quer
   expect(runtime.isCurrent()).toBe(false);
 });
 
+it("follows the split shared HTTP import and the non-gizmo model query factory", async () => {
+  const source = 'import{client as http}from"./app-shared-new.js";' + bundledSource
+    .replace('catalogState=query(app,()=>({placeholderData:empty,queryFn:()=>http.safeGet(`/models`,{parameters:{query:{iim:!1,include_icons:!1}}}).then(normalize),queryKey:[`chatgpt-models`]}));',
+      'function modelQuery(g){return{placeholderData:empty,queryFn:()=>http.safeGet(`/models`,{parameters:{query:{is_gizmo:g}}}).then(normalize),queryKey:g?[`chatgpt-models`,`gizmo`]:[`chatgpt-models`]}}catalogState=query(app,()=>modelQuery(!1)),gizmoState=query(app,()=>modelQuery(!0));')
+    .replace('http as b,', '');
+  const f = fixture(source);
+  const original = f.environment.importModule;
+  const environment = { ...f.environment, importModule: async (url: string) => url.endsWith('app-shared-new.js') ? { client: f.http } : original() };
+  const runtime = await discoverAppChatRuntime(environment);
+  await runtime.client.models();
+  expect(f.fetchModels).toHaveBeenCalledOnce();
+  expect(f.stream.startCompletionStream).not.toHaveBeenCalled();
+});
+
 it("adapts existing stream callbacks and native conversation routes without a second transport", async () => {
   const f = fixture();
   const { client } = await discoverAppChatRuntime(f.environment);

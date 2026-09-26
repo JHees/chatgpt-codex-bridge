@@ -1,7 +1,7 @@
 import type { AppChatClient, AppChatEnvironment, Scope } from "./app-chat-runtime.js";
 import { BridgeError } from "./errors.js";
 
-interface Bindings { transport: string; http: string; catalog: string }
+interface Bindings { transport: string; http: string; httpModule?: string; catalog: string }
 interface StreamClient { startCompletionStream(input: unknown): Promise<unknown> }
 interface NativeHttp {
   safeGet(path: string, options: unknown): Promise<unknown>;
@@ -34,9 +34,22 @@ function bindings(source: string): Bindings | undefined {
     if (!["prepareCompletionStream(", "createCompletionStreamHandlers(", "startCompletionStream("].every(marker => body.includes(marker))) continue;
     const httpName = body.match(/([\w$]+)\.safePost\(`\/conversation\/new_branch`/)?.[1];
     const catalogs = [...source.matchAll(/([\w$]+)=[\w$]+\([\w$]+,\(\)=>\(\{placeholderData:[\w$]+,queryFn:\(\)=>([\w$]+)\.safeGet\(`\/models`,[^;]{0,300}?queryKey:\[`chatgpt-models`\]/g)]
-      .filter(entry => entry[2] === httpName);
-    const transport = exported(match[1]), http = exported(httpName), catalog = catalogs.length === 1 ? exported(catalogs[0]![1]) : undefined;
-    if (transport && http && catalog) candidates.push({ transport, http, catalog });
+      .filter(entry => entry[2] === httpName).map(entry => entry[1]);
+    for (const query of source.matchAll(/([\w$]+)=[\w$]+\([\w$]+,\(\)=>([\w$]+)\(!1\)\)/g)) {
+      const start = source.indexOf(`function ${query[2]}(`);
+      if (start < 0) continue;
+      const body = source.slice(start).match(/^function [\w$]+\([\w$]+\)\{return\{placeholderData:[\w$]+,queryFn:\(\)=>([\w$]+)\.safeGet\(`\/models`,[^;]{0,500}?queryKey:[^;]{0,100}?\[`chatgpt-models`\]/);
+      if (body?.[1] === httpName) catalogs.push(query[1]);
+    }
+    const transport = exported(match[1]), catalog = catalogs.length === 1 ? exported(catalogs[0]) : undefined;
+    let http = exported(httpName), httpModule: string | undefined;
+    if (!http && httpName) {
+      const imports = [...source.matchAll(/\bimport\{([^{}]+)\}from["'`](\.\/app-shared-[A-Za-z0-9_-]+\.js)["'`]/g)]
+        .flatMap(entry => entry[1]!.split(',').map(value => ({ names: value.trim().split(/\s+as\s+/), url: entry[2]! })))
+        .filter(entry => entry.names.at(-1) === httpName);
+      if (imports.length === 1) { http = imports[0]!.names[0]; httpModule = imports[0]!.url; }
+    }
+    if (transport && http && catalog) candidates.push({ transport, http, ...(httpModule ? { httpModule } : {}), catalog });
   }
   return candidates.length === 1 ? candidates[0] : undefined;
 }
@@ -48,7 +61,11 @@ export async function discoverBundledChatRuntime(environment: AppChatEnvironment
   let module: Record<string, unknown> | undefined;
   try { module = object(await environment.importModule(selected.url)); } catch { unsupported(); }
   const descriptor = module?.[selected.transport], catalogDescriptor = module?.[selected.catalog];
-  const rawHttp = object(module?.[selected.http]);
+  let httpModule = module;
+  if (selected.httpModule) {
+    try { httpModule = object(await environment.importModule(new URL(selected.httpModule, selected.url).href)); } catch { unsupported(); }
+  }
+  const rawHttp = object(httpModule?.[selected.http]);
   if (descriptor === undefined || catalogDescriptor === undefined || !rawHttp || !["safeGet", "safePost", "safePatch", "safeDelete"].every(key => typeof rawHttp[key] === "function")) unsupported();
   const http = rawHttp as unknown as NativeHttp;
   const resolve = (): Map<StreamClient, Catalog> => {

@@ -27,11 +27,10 @@ export class BridgeUi {
   private backgroundError: string | null = null;
   private stopped = false;
   private readonly css: HTMLStyleElement;
-  private readonly zh: boolean;
+  private get zh(): boolean { return /^zh/i.test(this.document.documentElement.lang || navigator.language); }
 
   constructor(private readonly document: Document, private readonly api: LoaderApi, private readonly control: CooperationController,
     private readonly refreshModels: () => Promise<void>) {
-    this.zh = /^zh/i.test(document.documentElement.lang || navigator.language);
     this.css = document.createElement("style"); this.css.textContent = bridgeStyle;
   }
   private t(zh: string, en: string): string { return this.zh ? zh : en; }

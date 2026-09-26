@@ -24,6 +24,8 @@ Chat 拆解任务、提出方案并复核结果；Codex 审核具体操作、修
 
 ## 开始使用
 
+Bridge 0.1.6 支持并已验证 **Windows Codex 26.924.1866.0**。适配内容与验证范围见[更新说明](docs/RELEASE-0.1.6.md)。
+
 需要 Windows、可使用 Chat 的 Codex 桌面应用、**Codex Script Loader 0.5.12+** 和 **PowerShell 7**。
 
 1. 从 [Releases](https://github.com/JHees/chatgpt-codex-bridge/releases) 下载 `bridge-<版本>.zip`，在 Loader 中安装并启用。

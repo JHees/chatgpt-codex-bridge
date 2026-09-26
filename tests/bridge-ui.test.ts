@@ -208,6 +208,18 @@ it("registers one settings page and an off task control without sending or prepa
   expect(f.writes).toHaveLength(0);
 });
 
+it("reads the settled app language when UI mounts after document start", async () => {
+  const f = fixture(); f.ui.stop();
+  const ui = new BridgeUi(f.document, f.api, f.controller, f.refreshModels);
+  cleanup.push(() => ui.stop());
+  f.document.documentElement.lang = "zh-CN";
+  ui.start();
+  await Promise.resolve();
+  expect(f.settings.textContent).toContain("默认模型与思考程度");
+  expect(f.composer.textContent).toContain("Chat 协作");
+  expect(f.preparations).toHaveLength(0);
+});
+
 it("keeps working without batches and updates reply diagnostics through final verification", async () => {
   vi.useFakeTimers();
   let source = "Bridge status: continue\nInspect the source";
