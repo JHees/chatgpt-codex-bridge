@@ -75,7 +75,7 @@ it("keeps cleanup separate from completed work and allows a new task without los
   await controller.exchange({task:receiptTask,bindingId:"next",snapshotId:"next-snapshot",request:{...f.request(1),sessionId:"next-session"}});
   expect(controller.status({task:receiptTask}).pendingCleanup).toEqual([]);
   expect(controller.status({task:f.task,bindingId:"binding",read:{sessionId:"session",turnId:"turn-1"}}).turn).toMatchObject({state:"response",response:{status:"complete"}});
-  f.port.finish=async()=>{};await controller.finish({task:f.task,sessionId:"session",policy:"delete"});
+  await controller.abandonFromUi({task:f.task,sessionId:"session"});
   expect(controller.status({task:f.task}).pendingCleanup).toEqual([]);
   expect(controller.status({task:receiptTask}).active?.sessionId).toBe("next-session");
   controller.stop();

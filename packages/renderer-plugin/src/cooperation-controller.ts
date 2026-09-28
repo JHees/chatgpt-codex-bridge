@@ -148,7 +148,11 @@ export class CooperationController {
   async endFromUi(payload: unknown): Promise<{ state: "ended"; policy: CleanupPolicy }> {
     return await this.end(payload, true);
   }
-  private async end(payload: unknown, explicitUserEnd: boolean): Promise<{ state: "ended"; policy: CleanupPolicy }> {
+  async abandonFromUi(payload: unknown): Promise<{ state: "ended"; policy: CleanupPolicy }> {
+    const input = fields(payload, ["task", "sessionId"]);
+    return await this.end({ ...input, policy: "retain" }, true, true);
+  }
+  private async end(payload: unknown, explicitUserEnd: boolean, localOnly = false): Promise<{ state: "ended"; policy: CleanupPolicy }> {
     this.check();
     const input = fields(payload, ["task", "sessionId", "policy"], ["reason"]);
     if (input.reason !== undefined && input.reason !== "user-request") throw new BridgeError("INVALID_REQUEST", "Unknown termination reason.");
@@ -160,11 +164,17 @@ export class CooperationController {
       return {state:"ended",policy:this.completed.policy};
     }
     const active = this.owned(identity(input.task), id(input.sessionId));
+    if (localOnly && (active.session.status().state !== "cleanup-failed" || active.session.status().busy)) throw new BridgeError("CLEANUP_NOT_FAILED", "Local-only termination is available after cleanup fails.");
     if (input.policy !== "retain" && !explicitUserEnd && !active.session.hasCompletedReport()) throw new BridgeError("COMPLETION_UNVERIFIED", "Report verified completion before automatic cleanup, or end in response to an explicit user request.");
     const completed = active.session.completedReply();
     const lastReply = active.session.status().lastReply;
     const receipt = {task:active.session.config.task,sessionId:active.session.id,bindingId:active.bindingId,...completed,policy:input.policy,lastReply};
-    try { await active.session.finish(input.policy); this.check(); }
+    try {
+      // Explicit UI fallback releases local ownership even if a native cleanup promise is unresolved.
+      if (localOnly) active.session.stop();
+      else await active.session.finish(input.policy);
+      this.check();
+    }
     catch (error) {
       if (completed && !this.stopped) {
         // Business verification is complete. Keep the exact cleanup target separately.

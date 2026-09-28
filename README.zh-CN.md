@@ -24,7 +24,7 @@ Chat 拆解任务、提出方案并复核结果；Codex 审核具体操作、修
 
 ## 开始使用
 
-Bridge 0.1.6 支持并已验证 **Windows Codex 26.924.1866.0**。适配内容与验证范围见[更新说明](docs/RELEASE-0.1.6.md)。
+Bridge 0.1.7 已在 **Windows Codex 26.924.2738.0** 上完成候选热加载检查。模型标签精简、清理失败恢复及验证范围见[更新说明](docs/RELEASE-0.1.7.md)。
 
 需要 Windows、可使用 Chat 的 Codex 桌面应用、**Codex Script Loader 0.5.12+** 和 **PowerShell 7**。
 

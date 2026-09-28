@@ -188,13 +188,43 @@ it("the real task-panel end button can finish a busy exchange and clear only its
   const pending=f.controller.exchange({task,bindingId:"binding-1",snapshotId:config.id,request:{protocol:"codex-chat-bridge/v1",sessionId:"session",turnId:"turn",kind:"request",objective:"Test stop",state:{phase:"plan",summary:"Waiting",completed:[],blockers:[]},message:"Plan",actionResults:[]}}).catch(error=>error);
   await started;
   f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
-  const end=[...f.document.querySelectorAll<HTMLButtonElement>(".bridge-actions button")].find(button=>button.textContent==="End and retain")!;
+  f.configuration.saveDefaults({...f.configuration.defaults(),cleanup:"archive"});
+  const end=[...f.document.querySelectorAll<HTMLButtonElement>(".bridge-actions button")].find(button=>button.textContent==="End")!;
   expect(end).toBeDefined(); end.click(); await vi.advanceTimersByTimeAsync(0);
   expect(await pending).toMatchObject({code:"SESSION_ENDING"});
   expect(finishes).toBe(1);
   expect(f.controller.status({task}).active).toBeNull();
   expect(f.clears()).toBe(1);
   expect(f.document.querySelector(".bridge-popover")).toBeNull();
+  expect(f.configuration.task(task).enabled).toBe(false);
+});
+
+it.each([false, true])("uses default cleanup and ends locally after failure (completed: %s)", async completed => {
+  vi.useFakeTimers();
+  const policies: string[] = [];
+  let disposed = 0;
+  const port: BackgroundChatPort = {check:async()=>{},send:async()=>"message",read:async()=>completed ? {state:"complete",text:"Bridge status: complete\nVerified"} : {state:"waiting"},
+    finish:async policy=>{policies.push(policy);throw Error("pending deletion");},dispose:()=>{disposed++;}};
+  const f = fixture(true,true,port); await vi.advanceTimersByTimeAsync(1); f.accept();
+  const task = {hostId:"local",taskId:"task-a"};
+  const snapshot = f.controller.status({task,bindingId:"binding-1"}).prepared!;
+  await f.controller.exchange({task,bindingId:"binding-1",snapshotId:snapshot.id,request:{protocol:"codex-chat-bridge/v1",sessionId:"session",turnId:"turn",kind:"request",objective:"Check",state:{phase:completed ? "complete" : "plan",summary:"Check",completed:completed ? ["Verified"] : [],blockers:[]},message:"Plan",actionResults:[]}});
+  f.configuration.saveDefaults({...f.configuration.defaults(),cleanup:"archive"});
+  f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  const buttons = () => [...f.document.querySelectorAll<HTMLButtonElement>(".bridge-actions button")];
+  expect(buttons().filter(button=>!button.hidden).map(button=>button.textContent)).toEqual(completed ? ["End", "End Bridge only"] : ["End"]);
+  buttons().find(button=>button.textContent==="End")!.click(); await vi.advanceTimersByTimeAsync(0);
+  expect(policies).toEqual(completed ? ["delete", "archive"] : ["archive"]);
+  const fallback = buttons().find(button=>button.textContent==="End Bridge only")!;
+  expect(fallback.hidden).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(fallback.hidden).toBe(false);
+  fallback.click(); await vi.advanceTimersByTimeAsync(1000);
+  expect(policies).toEqual(completed ? ["delete", "archive"] : ["archive"]); expect(disposed).toBe(1);
+  expect(f.controller.status({task})).toMatchObject({active:null,pendingCleanup:[]});
+  expect(f.configuration.task(task).enabled).toBe(false);
+  expect(f.document.querySelector(".bridge-popover")).toBeNull();
+  expect(f.preparations).toHaveLength(1);
 });
 
 it("registers one settings page and an off task control without sending or preparing a context", async () => {
@@ -231,6 +261,8 @@ it("keeps working without batches and updates reply diagnostics through final ve
   const call = {task,bindingId:"binding-1",snapshotId:snapshot.id,request};
   await f.controller.exchange(call);
   f.composer.querySelector("button")!.click(); await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.composer.querySelector("button")!.textContent).toBe("Chat replied · Codex action pending · Reasoner · Medium");
   const panel = f.document.querySelector(".bridge-popover")!;
   expect(panel.textContent).toContain("Working until task completion");
   expect(panel.textContent).not.toContain("Allow next batch");
@@ -308,14 +340,16 @@ it("shows model families as hover submenus and selects the exact Pro backend onl
   const row = f.document.querySelector<HTMLButtonElement>('[data-bridge-model]')!;
   f.fire(row, "pointerenter");
   expect(row.getAttribute("aria-expanded")).toBe("true");
-  expect(f.document.querySelectorAll('[role="menuitemradio"]')).toHaveLength(2);
+  expect(f.document.querySelectorAll('.bridge-submenu [role="menuitemradio"]')).toHaveLength(2);
   expect(f.configuration.task({hostId:"local",taskId:"task-a"}).modelKey).toBe(f.configuration.models()[0]!.key);
   const pro = [...f.document.querySelectorAll<HTMLButtonElement>('[data-bridge-model]')][1]!;
   pro.click();
   expect(f.configuration.task({hostId:"local",taskId:"task-a"}).modelKey).toBe(JSON.stringify(["pro-model","pro",null]));
   expect(f.document.querySelectorAll('[data-bridge-model][data-selected="true"]')).toHaveLength(1);
   expect(row.querySelector('.bridge-model-caption')!.textContent).toBe("");
-  expect(f.document.querySelector('.bridge-submenu')!.textContent).toContain("no separate thinking level");
+  expect(f.document.querySelector('.bridge-submenu')).toBeNull();
+  expect(pro.querySelector('.bridge-model-caption')!.textContent).toBe("");
+  expect(pro.hasAttribute("aria-haspopup")).toBe(false);
   expect(f.writes).toHaveLength(0);
 });
 
@@ -422,14 +456,21 @@ it("prepares visible instructions once, then never re-adds a user-deleted contex
   expect(f.preparations).toHaveLength(1);
 });
 
-it("puts explicit Pro mode before truncatable model details on the compact control", async () => {
+it.each([
+  ["pro", "GPT-6 Pro", "Pro", null, "GPT-6 Pro"],
+  ["instant", "GPT-6", "Instant", null, "GPT-6"],
+  ["thinking", "GPT-6", "Extended", "extended", "GPT-6 · Extended"],
+])("shows only the model and a real thinking level for %s", async (lane, modelTitle, selectedLabel, thinkingEffort, expected) => {
   vi.useFakeTimers();
   const f = fixture(true);
-  f.configuration.updateTask({ hostId: "local", taskId: "task-a" }, { modelKey: f.configuration.models().find(model => model.mode === "pro")!.key });
+  f.configuration.updateCatalog({options:[{slug:"selected-model",lane,modelTitle,selectedLabel,thinkingEffort}]});
+  f.configuration.updateTask({ hostId: "local", taskId: "task-a" }, { modelKey: f.configuration.models()[0]!.key });
   await vi.advanceTimersByTimeAsync(1000);
   const button = f.composer.querySelector("button")!;
-  expect(button.textContent).toMatch(/^Pro · /);
-  expect(button.title).toContain("Planner");
+  expect(button.textContent).toBe(expected);
+  expect(button.title).toBe(expected);
+  f.accept(); await vi.advanceTimersByTimeAsync(1000);
+  expect(button.textContent).toBe(`Waiting for Codex to connect · ${expected}`);
 });
 
 it("does not persist invalid default values before validating them", () => {
@@ -447,7 +488,7 @@ it("automatically persists a selected default model without a Save button", asyn
   f.settings.querySelector<HTMLButtonElement>(".bridge-preset-trigger")!.click(); await Promise.resolve(); await Promise.resolve();
   const pro = [...f.document.querySelectorAll<HTMLButtonElement>('[data-bridge-model]')][1]!;
   pro.click();
-  expect(f.settings.querySelector(".bridge-preset-trigger")!.textContent).toContain("Planner · Pro");
+  expect(f.settings.querySelector(".bridge-preset-trigger")!.textContent).toBe("Planner");
   expect(f.writes).toHaveLength(1);
   expect(f.settings.querySelector('[type="submit"]')).toBeNull();
   expect(f.configuration.defaults().modelKey).toBe(JSON.stringify(["pro-model","pro",null]));

@@ -2,6 +2,7 @@ import { Check, ChevronRight, type IconNode } from "lucide";
 import type { ChatModel } from "./chat-configuration.js";
 
 export const modelGroup = (model: ChatModel): string => model.groupId ?? JSON.stringify([model.slug, model.mode]);
+export const modelLabel = (model: ChatModel): string => model.title + (model.effort === null ? "" : ` · ${model.effortLabel}`);
 
 /** UI-only matching after an explicit family choice. Never substitutes a running model. */
 export function preferredModel(choices: readonly ChatModel[], preference?: ChatModel): ChatModel | undefined {
@@ -43,16 +44,19 @@ export function mountModelMenu(root: HTMLElement, models: readonly ChatModel[], 
   };
   for (const [key, first] of new Map(models.map(model => [modelGroup(model), model]))) {
     const choices = models.filter(model => modelGroup(model) === key);
+    const hasOptions = choices.length > 1 || first.effort !== null;
     const row = document.createElement("button"); row.type = "button"; row.className = "bridge-model-row"; row.dataset.bridgeModel = key;
-    row.setAttribute("role", "menuitem"); row.setAttribute("aria-haspopup", "menu"); row.setAttribute("aria-expanded", "false");
+    row.setAttribute("role", hasOptions ? "menuitem" : "menuitemradio");
+    if (hasOptions) { row.setAttribute("aria-haspopup", "menu"); row.setAttribute("aria-expanded", "false"); }
     const title = document.createElement("span"); title.textContent = first.groupTitle ?? first.title;
     const caption = document.createElement("span"); caption.className = "bridge-model-caption";
-    const update = (): void => { const selected = choices.find(model => model.key === current()); caption.textContent = selected?.effortLabel ?? ""; row.dataset.selected = String(!!selected); };
+    const update = (): void => { const selected = choices.find(model => model.key === current()); caption.textContent = selected?.effort != null ? selected.effortLabel : ""; row.dataset.selected = String(!!selected); if (!hasOptions) row.setAttribute("aria-checked", String(!!selected)); };
     refreshRows.push(update);
-    row.append(title, caption, menuIcon(document, "next")); list.append(row); update();
+    row.append(title, caption); if (hasOptions) row.append(menuIcon(document, "next")); list.append(row); update();
     const show = (): void => {
       if (trigger === row) return;
-      hide(); trigger = row; row.setAttribute("aria-expanded", "true");
+      hide(); if (!hasOptions) return;
+      trigger = row; row.setAttribute("aria-expanded", "true");
       child = document.createElement("div"); child.className = "bridge-submenu"; child.setAttribute("role", "menu"); child.setAttribute("aria-label", `${title.textContent} · ${zh ? "模式／思考程度" : "Mode / thinking level"}`);
       const heading = document.createElement("div"); heading.className = "bridge-menu-heading"; heading.textContent = title.textContent; child.append(heading);
       const preferred = preferredModel(choices, preference());

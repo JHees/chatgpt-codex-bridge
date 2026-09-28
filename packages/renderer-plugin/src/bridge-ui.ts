@@ -1,7 +1,7 @@
 import type { ChatSettings, ComposerIdentity, PreparedConfiguration } from "./chat-configuration.js";
 import type { CooperationController } from "./cooperation-controller.js";
 import type { ComposerHandle, LoaderApi } from "./loader-interface.js";
-import { menuIcon, mountModelMenu } from "./model-menu.js";
+import { menuIcon, modelLabel, mountModelMenu } from "./model-menu.js";
 import { bridgeStyle } from "./bridge-style.js";
 import { mountContextPresentation } from "./context-presentation.js";
 
@@ -182,7 +182,7 @@ export class BridgeUi {
     picker.className = "bridge-preset-trigger"; picker.setAttribute("aria-haspopup", "dialog"); picker.setAttribute("aria-expanded", "false");
     const updatePicker = (): void => {
       const selected = this.control.configuration.models().find(model => model.key === value.modelKey);
-      picker.replaceChildren(this.node("span", selected ? `${selected.groupTitle ?? selected.title} · ${selected.effortLabel}` : this.t("选择模型", "Choose model")), menuIcon(this.document, "next"));
+      picker.replaceChildren(this.node("span", selected ? modelLabel(selected) : this.t("选择模型", "Choose model")), menuIcon(this.document, "next"));
     };
     updatePicker();
     label(this.t("默认模型与思考程度", "Default model and thinking level"), picker, this.t("任务切换模型时，优先使用此档位；不支持时匹配最接近的可用值。", "Task model changes use this level, or the closest supported level."));
@@ -223,19 +223,18 @@ export class BridgeUi {
       const status = "draftId" in owner ? null : this.control.status({ task: owner });
       const active = status?.active;
       const selected = this.control.configuration.models().find(model => model.key === settings.modelKey);
-      const name = active ? `${active.config.model.title} · ${active.config.model.mode}` : selected ? `${selected.title} · ${selected.mode}` : this.t("未选模型", "Choose model");
+      const model = active?.config.model ?? selected;
+      const name = model ? modelLabel(model) : this.t("未选模型", "Choose model");
       const clock = (ms: number): string => `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
       const waiting = active?.state === "waiting" || active?.state === "paused";
-      button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)}${active.allowedMs == null ? "" : ` / ${clock(active.allowedMs)}`}` : ""}` : `${this.t("Chat 协作", "Chat collaboration")}: ${settings.enabled ? this.t("开", "on") : this.t("关", "off")}${settings.enabled ? ` · ${name} · ${selected?.effortLabel ?? "—"}` : ""}`;
+      button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)}${active.allowedMs == null ? "" : ` / ${clock(active.allowedMs)}`}` : ""}` : settings.enabled ? name : this.t("Chat 协作: 关", "Chat collaboration: off");
       if (!active && settings.enabled && status?.connection) button.textContent = `${this.t("等待 Codex 接入", "Waiting for Codex to connect")} · ${name}`;
       if (this.blockedPreparation.has(key)) button.textContent = this.t("旧协作说明需重新准备", "Saved collaboration instructions need renewal");
-      // Keep the user's explicit Pro choice visible even when model details truncate.
-      if ((active?.config.model.mode ?? (settings.enabled ? selected?.mode : undefined)) === "pro") button.textContent = `Pro · ${button.textContent}`;
       button.title = button.textContent;
       const prepared = this.prepared.get(key);
       // Do not re-add a removed/edited instruction. Only a positively accepted submission ends this preparation.
       if (prepared && (this.receipt(prepared.bindingId) as { state?: string }).state === "accepted") this.prepared.delete(key);
-      if (settings.enabled && settings.modelKey !== null && !this.prepared.has(key) && !this.blockedPreparation.has(key) && !active && typeof this.handle?.prepareSubmission === "function") {
+      if (settings.enabled && settings.modelKey !== null && !this.prepared.has(key) && !this.blockedPreparation.has(key) && !active && !status?.pendingCleanup.length && typeof this.handle?.prepareSubmission === "function") {
         try { this.prepare(owner); } catch (error) { this.error(error); }
       }
     };
@@ -344,6 +343,37 @@ export class BridgeUi {
     }
     let stateNode: HTMLParagraphElement | undefined;
     const consentButtons = new Map<string, HTMLButtonElement>();
+    const localEndButtons = new Map<string, HTMLButtonElement>();
+    const endActions = (sessionId: string, failed: boolean): HTMLDivElement => {
+      const actions = this.node("div"); actions.className = "bridge-actions";
+      if ("draftId" in owner) return actions;
+      const note = this.node("p"); note.className = "bridge-quick-state"; note.setAttribute("role", "status");
+      const end = async (localOnly: boolean): Promise<void> => {
+        if (!this.ownsMountedContext(owner)) { close(); return; }
+        for (const button of actions.querySelectorAll("button")) button.disabled = true;
+        note.textContent = this.t("正在结束协作…", "Ending collaboration…");
+        try {
+          if (localOnly) await this.control.abandonFromUi({task:owner,sessionId});
+          else await this.control.endFromUi({task:owner,sessionId,policy:this.control.configuration.defaults().cleanup});
+          if (!this.control.status({task:owner}).active) {
+            this.control.setEnabled(owner, false);
+            this.prepared.delete(JSON.stringify(owner)); this.blockedPreparation.delete(JSON.stringify(owner));
+            if (this.ownsMountedContext(owner)) this.handle?.clearContext();
+          }
+          close();
+        } catch (error) {
+          const current = this.control.status({task:owner});
+          fallback.hidden = !(current.active?.sessionId === sessionId && current.active.state === "cleanup-failed"
+            || current.pendingCleanup.some(entry => entry.sessionId === sessionId));
+          note.textContent = this.t("Chat 处理失败。可重试，或直接结束 Bridge，不再处理 Chat。已发出的请求可能仍会完成。", "Chat cleanup failed. Retry or end Bridge only. An already-sent request may still complete.");
+          throw error;
+        } finally { for (const button of actions.querySelectorAll("button")) button.disabled = false; position(); }
+      };
+      const fallback = this.button(this.t("直接结束 Bridge", "End Bridge only"), () => end(true));
+      fallback.hidden = !failed; localEndButtons.set(sessionId, fallback);
+      actions.append(this.button(this.t("结束", "End"), () => end(false)), fallback, note);
+      return actions;
+    };
     if (!("draftId" in owner)) {
       const diagnostics = this.node("p"); diagnostics.className = "bridge-quick-state"; diagnostics.setAttribute("role", "status"); panel.append(diagnostics);
       diagnostics.style.whiteSpace = "pre-line";
@@ -352,6 +382,8 @@ export class BridgeUi {
         const current = this.control.status({ task: owner }), lines: string[] = [];
         // Session-bound controls must not outlive their owner or target a replacement session.
         if (current.active?.sessionId !== active?.sessionId) { close(); return; }
+        for (const [sessionId, button] of localEndButtons) button.hidden = !(current.active?.sessionId === sessionId && current.active.state === "cleanup-failed"
+          || current.pendingCleanup.some(entry => entry.sessionId === sessionId));
         if (current.active) {
           if (stateNode) stateNode.textContent = `${this.stateLabel(current.active.state)} · ${this.t("已发送请求", "Requests sent")}: ${current.active.usedRequests}`;
           for (const [action, button] of consentButtons) button.hidden = action === "remove-request-limit"
@@ -385,7 +417,7 @@ export class BridgeUi {
         const repair = this.node("p", this.t("Chat 已回复，但格式需要一次修复。Codex 应续读同一请求，不是重新提交任务。", "Chat replied, but its format needs one repair. Codex should continue the same request, not resubmit the task."));
         repair.className = "bridge-quick-state"; repair.setAttribute("role", "status"); panel.append(repair);
       }
-      const details = this.node("details"), actions = this.node("div"); actions.className = "bridge-actions";
+      const details = this.node("details"), actions = endActions(active.sessionId, active.state === "cleanup-failed");
       details.append(this.node("summary", this.t("管理当前协作", "Manage collaboration")), actions); panel.append(details);
       details.addEventListener("toggle", position);
       const add = (label: string, action: "remove-request-limit" | "continue-waiting", available: boolean): void => {
@@ -394,28 +426,11 @@ export class BridgeUi {
       };
       add(this.t("取消本次请求上限", "Remove this session's request limit"), "remove-request-limit", active.maxRequests !== null && !active.busy && active.turnId === undefined);
       add(this.t("继续等待", "Continue waiting"), "continue-waiting", active.state === "paused");
-      for (const policy of ["retain", "archive", "delete"] as const) {
-        const labels = {retain:this.t("结束并保留", "End and retain"),archive:this.t("结束并归档", "End and archive"),delete:this.t("结束并删除", "End and delete")};
-        actions.append(this.button(labels[policy], async () => {
-          for (const button of actions.querySelectorAll("button")) button.disabled = true;
-          state.textContent = this.t("正在结束协作…", "Ending collaboration…");
-          try { await this.control.endFromUi({ task: owner, sessionId: active.sessionId, policy }); if (this.ownsMountedContext(owner)) this.handle?.clearContext(); close(); }
-          catch (error) {
-            const current = this.control.status({task:owner}).active;
-            state.textContent = current?.cleanupReason === "CLEANUP_UNSAFE"
-              ? this.t("Chat 仍在生成或归属尚未确认；完成后可重试，也可结束并保留。", "Chat is still generating or ownership is unconfirmed. Retry after completion, or end and retain.")
-              : this.t("结束未完成，可以重试或保留会话。", "Ending did not complete. Retry or retain the conversation.");
-            throw error;
-          } finally { for (const button of actions.querySelectorAll("button")) button.disabled = false; }
-        }));
-      }
     }
     if (!("draftId" in owner)) for (const cleanup of this.control.status({task:owner}).pendingCleanup) {
       const box = this.node("div"); box.className = "bridge-quick-state";
       box.append(this.node("p", this.t("任务已完成，Chat 清理待处理", "Task completed; Chat cleanup pending") + ` · ${cleanup.reason ?? "CLEANUP_FAILED"}`));
-      for (const policy of [cleanup.policy, "retain"] as const) box.append(this.button(policy === "retain" ? this.t("保留 Chat", "Retain Chat") : this.t("重试清理", "Retry cleanup"), async () => {
-        await this.control.finish({task:owner,sessionId:cleanup.sessionId,policy}); close();
-      }));
+      box.append(endActions(cleanup.sessionId, true));
       panel.append(box);
     }
     const error = this.node("p", this.lastError ?? ""); error.dataset.bridgeError = "true"; error.className = "bridge-quick-state"; error.setAttribute("role", "status"); panel.append(error);

@@ -182,6 +182,27 @@ it("rejects attempts to grant consent through command payloads", async () => {
   expect(f.sends).toHaveLength(0);
 });
 
+it.each([false, true])("locally ends failed cleanup without touching Chat (completed: %s)", async completed => {
+  const f = fixture(); f.accept();
+  let finishes = 0, disposals = 0;
+  f.port.finish = async () => { finishes++; throw Error("cleanup still pending"); };
+  f.port.dispose = () => { disposals++; };
+  if (completed) f.port.read = async () => ({state:"complete",text:"Bridge status: complete\nVerified"});
+  await f.controller.exchange(completed ? {...f.payload,request:{...f.payload.request,state:{phase:"complete",summary:"Verified",completed:["Checked"],blockers:[]}}} : f.payload);
+  const target = {task:f.task,sessionId:"session-a"};
+  if (!completed) {
+    await expect(f.controller.abandonFromUi(target)).rejects.toMatchObject({code:"CLEANUP_NOT_FAILED"});
+    await expect(f.controller.endFromUi({...target,policy:"delete"})).rejects.toMatchObject({code:"CLEANUP_FAILED"});
+  }
+  await expect(f.controller.abandonFromUi({...target,task:{...f.task,taskId:"other"}})).rejects.toMatchObject({code:"TASK_MISMATCH"});
+  await expect(f.controller.finish({...target,policy:"retain",abandon:true})).rejects.toMatchObject({code:"INVALID_REQUEST"});
+  await f.controller.abandonFromUi(target);
+  expect(finishes).toBe(1); expect(disposals).toBe(1);
+  expect(f.controller.hasActiveSession()).toBe(false);
+  expect(f.controller.status({task:f.task})).toMatchObject({active:null,pendingCleanup:[],connection:null});
+  await expect(f.controller.exchange(f.payload)).rejects.toMatchObject({code:"SESSION_LOST"});
+});
+
 it("replaces unsent preparations without exhausting bindings or dropping accepted and uncertain submissions", async () => {
   const f=fixture();
   const controller = new CooperationController(f.config, bindingId=>({state:bindingId==="binding-a"?"accepted":bindingId==="dispatched"?"dispatched":"prepared",bindingId,...f.task,turnId:"native-turn"}),()=>f.port);
