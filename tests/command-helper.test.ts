@@ -64,17 +64,15 @@ it.skipIf(process.platform !== "win32")("distinguishes permission denial from co
 });
 it.skipIf(process.platform !== "win32")("resolves the default installation from the user's local folder instead of the redirected process folder", () => {
   const directory = mkdtempSync(join(tmpdir(), "bridge-helper-"));
+  const installation = join(directory, "Programs", "CodexScriptLoader");
+  mkdirSync(installation, {recursive:true});
+  writeFileSync(join(installation, "active.json"), JSON.stringify({version:"0.5.10",rid:"win-x64"}));
   try {
     const command = `
       function Get-ItemPropertyValue {
         param($LiteralPath,$Name)
         if($LiteralPath -ne 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders' -or $Name -ne 'Local AppData'){throw 'Wrong folder lookup'}
         ${quote(directory)}
-      }
-      function Get-Content {
-        param($LiteralPath)
-        if($LiteralPath -ne ${quote(join(directory,'Programs','CodexScriptLoader','active.json'))}){throw 'Redirected folder used'}
-        '{"version":"0.5.10","rid":"win-x64"}'
       }
       & ${quote(helper)} -Operation status -PayloadJson '{}'
     `;
