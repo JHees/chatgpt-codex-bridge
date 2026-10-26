@@ -1,5 +1,5 @@
 import type { AppChatClient } from "./app-chat-runtime.js";
-import type { BackgroundChatPort } from "./background-session.js";
+import type { ChatPort } from "./session.js";
 import type { ChatModel, CleanupPolicy } from "./chat-configuration.js";
 import { BridgeError } from "./errors.js";
 
@@ -31,7 +31,7 @@ function object(value: unknown): Record<string, any> | undefined {
 function nonempty(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.length <= 256; }
 
 /** Native App transport only: no DOM, navigation, separate HTTP authentication or database access. */
-export class AppChatBackgroundAdapter implements BackgroundChatPort {
+export class AppChatBackgroundAdapter implements ChatPort {
   private conversationId: string | undefined;
   private readonly sent = new Map<string, SentMessage>();
   private last: SentMessage | undefined;
@@ -44,6 +44,7 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
   private ownedTitle: string | undefined;
   private titleError: string | null = null;
   private readonly wake = new Set<() => void>();
+  private readonly lifetime = new AbortController();
 
   constructor(private readonly client: AppChatClient, private readonly isCurrent: () => boolean, private readonly uuid: () => string = () => crypto.randomUUID()) {}
 
@@ -184,10 +185,10 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
   private async completedReply(turn: SentMessage): Promise<{ state: "waiting" } | { state: "complete"; text: string }> {
     if (!this.conversationId) throw new BridgeError("SESSION_UNCONFIRMED", "The native conversation identity is missing.");
     // The enclosing read owns one short-window timer; keep this in-flight lookup reusable.
-    const status = object(await this.client.getConversationStreamStatus(this.conversationId!));
+    const status = object(await this.bounded(this.client.getConversationStreamStatus(this.conversationId!), "CHAT_READ_TIMEOUT"));
     this.assertCurrent();
     if (status?.status !== "COMPLETE") return { state: "waiting" };
-    const conversation = await this.ownedConversation(false);
+    const conversation = await this.ownedConversation();
     let nodeId = conversation.current_node;
     const seen = new Set<string>();
     let reply: Record<string, any> | undefined;
@@ -245,7 +246,7 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
     if (conversation.is_archived !== true) throw new BridgeError("ARCHIVE_UNCONFIRMED", "Archive has not been confirmed; retry to read the same target.");
   }
 
-  dispose(): void { this.disposed = true; this.sent.clear(); this.last = undefined; this.notify(); }
+  dispose(): void { this.disposed = true; this.lifetime.abort(); this.sent.clear(); this.last = undefined; this.notify(); }
   diagnostics() { return { titleError: this.titleError }; }
   private async prefixTitle(conversation: Record<string, any>): Promise<void> {
     if (this.titleAttempted) return;
@@ -294,10 +295,14 @@ export class AppChatBackgroundAdapter implements BackgroundChatPort {
   }
   private async bounded<T>(operation: Promise<T>, code: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancel: (() => void) | undefined;
     try {
       return await Promise.race([operation, new Promise<never>((_, reject) => {
+        cancel = () => reject(new BridgeError("SESSION_LOST", "The plugin stopped during the metadata operation."));
+        if (this.lifetime.signal.aborted) { cancel(); return; }
+        this.lifetime.signal.addEventListener("abort", cancel, { once: true });
         timer = setTimeout(() => reject(new BridgeError(code, "The native metadata operation exceeded its bounded window.")), 10_000);
       })]);
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); if (cancel) this.lifetime.signal.removeEventListener("abort", cancel); }
   }
 }

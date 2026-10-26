@@ -1,44 +1,38 @@
 # Bridge
 
-**Chat plans. Codex builds. Bridge keeps them working together.**
+Version **0.2.0** uses a simpler single-session, plain-text exchange protocol and includes its matching Loader-managed skill. Update the renderer and bundled skill together; old command payloads are not compatible. See [release notes](docs/RELEASE-0.2.0.md).
+
+**Chat advises. Codex does the work. Bridge carries the conversation.**
 
 [![CI](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/JHees/chatgpt-codex-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 English · [简体中文](README.zh-CN.md)
 
-Bridge is a [Codex Script Loader](https://github.com/JHees/codex-script-loader) plugin that connects a Chat planner to your current Codex task. Pair Chat Pro or another reasoning model with a fast Codex executor to write code, fix bugs, and review changes.
+Bridge is a Codex Script Loader plugin that connects the current Codex task to the Chat model you choose. Chat reviews plans and results; Codex checks the advice, works in your project, and reports evidence.
 
-## Why Bridge?
+## Use Bridge
 
-Working with two models usually means carrying plans, code, and test results between conversations yourself. Bridge handles that exchange automatically.
+Requirements: Windows Codex desktop with Chat access, Codex Script Loader, and PowerShell 7.
 
-Chat breaks down the task, proposes changes, and reviews the results. Codex reviews the proposed actions, edits local files, runs commands and tests, then sends the results back. You describe the outcome and steer the work from the same task.
+1. Install the Bridge ZIP through Loader once.
+2. In the Codex composer, choose a Chat model and enable Bridge for this task.
+3. Describe the work normally. Codex checks Bridge's status, sends a short brief, and follows up with results in the same Chat.
+4. Turn Bridge off for this task to stop new messages, or ask Codex to end the session.
 
-## Highlights
+Choose a model explicitly, including Pro. Existing tasks start disabled until you enable them. For a new task, create the task before enabling Bridge; an unsent draft does not grant a session.
 
-- **Choose each model independently.** Set Chat's model and thinking level while keeping your preferred Codex executor.
-- **Automatic back-and-forth.** Plans, progress, and test results flow between the two models without manual copying.
-- **Work through the task.** Chat adjusts its guidance as results come back, guiding the next steps until the task is complete.
-- **Built into your workflow.** Start collaboration from the Codex input area and keep working in the current task.
-
-## Get started
-
-Bridge 0.1.7 was hot-loaded and checked with **Codex 26.924.2738.0 on Windows**. See the [release notes](docs/RELEASE-0.1.7.md) for simpler model labels, cleanup recovery, and validation scope.
-
-Requires Windows, the Codex desktop app with Chat access, **Codex Script Loader 0.5.12+**, and **PowerShell 7**.
-
-1. Download `bridge-<version>.zip` from [Releases](https://github.com/JHees/chatgpt-codex-bridge/releases), then install and enable it in Loader.
-2. Open Bridge from the Codex input area, select your Chat model and thinking level, and enable collaboration.
-3. Send your request with the collaboration instructions that Bridge adds.
+A waiting result means Chat is still generating. Codex continues the same instance, session and request IDs; it does not send the message again. If a reply's output is lost, Codex reads the saved result by its original request ID. Reload changes the instance ID and prevents an old request from starting a duplicate generation.
 
 ![Bridge in the Codex input area](docs/images/bridge-composer.png)
 
-For example:
+## How it works
 
-> Fix this bug. Have Chat work out the solution and guide Codex through the code changes and tests, then review the results.
+Bridge keeps one in-memory session per Loader instance. Loader supplies task identity and the fixed `status`, `exchange`, and `finish` commands. A native Chat adapter supplies the model catalog and sends or reads messages. Task preferences persist; prompts, replies and active sessions do not. Reloading the plugin ends the local session without replaying requests.
 
-[Usage guide](docs/USAGE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Report an issue](https://github.com/JHees/chatgpt-codex-bridge/issues)
+The Chat adapter uses Codex renderer services that do not have a stable third-party extension interface. If a future Codex update changes those services, Bridge reports a clear connection error; it does not switch models or resend uncertain messages.
+
+For source-level design and state flow, see [the architecture note](docs/ARCHITECTURE.md). The bundled skill contains the Codex workflow. [Troubleshooting](docs/TROUBLESHOOTING.md) · [Usage guide](docs/USAGE.md) · [Report an issue](https://github.com/JHees/chatgpt-codex-bridge/issues)
 
 ## License
 

@@ -184,20 +184,30 @@ it("does not busy-poll when the stream callback completes before native completi
   } finally { vi.useRealTimers(); }
 });
 
-it("bounds final-state reads by the same window even if the App read is slow", async () => {
+it("reports a metadata timeout and retries only the read, never the native send", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   try {
     let native!: NativeCompletionInput;
-    const client: AppChatClient = { models: async () => ({}), get: () => new Promise(() => {}), delete: async () => {}, getConversationStreamStatus: async () => ({ status: "COMPLETE" }), startCompletionStream: async input => { native = input as NativeCompletionInput; native.onRequestStart(); } };
-    const adapter = new AppChatBackgroundAdapter(client, () => true);
+    let recovered = false, sends = 0;
+    const conversation = { current_node: "reply", mapping: {
+      user: { message: { id: "user", author: { role: "user" }, content: { parts: ["Request"] } } },
+      reply: { parent: "user", message: { id: "reply", author: { role: "assistant" }, end_turn: true, content: { parts: ["Reply"] } } },
+    } };
+    const client: AppChatClient = {
+      models: async () => ({}), get: () => recovered ? Promise.resolve(conversation) : new Promise(() => {}), delete: async () => {},
+      getConversationStreamStatus: async () => ({ status: "COMPLETE" }),
+      startCompletionStream: async input => { sends++; native = input as NativeCompletionInput; native.onRequestStart(); },
+    };
+    const adapter = new AppChatBackgroundAdapter(client, () => true, () => "user");
     const id = await adapter.send({ text: "Request", model: { key: "chosen", slug: "planner", mode: "thinking", title: "Planner", effort: "standard", effortLabel: "Medium" } });
-    native.onUpdate({ conversationId: "owned-chat" });
+    native.onUpdate({ conversationId: "owned-chat",type:"message",message:{id:"reply"} });
     native.onComplete({ reason: "done" });
-    let returned = false;
-    const read = adapter.read(id, 30_000).then(result => { returned = true; return result; });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(returned).toBe(true);
-    expect(await read).toEqual({ state: "waiting" });
+    const read = expect(adapter.read(id, 30_000)).rejects.toMatchObject({code:"CHAT_READ_TIMEOUT"});
+    await vi.advanceTimersByTimeAsync(10_000);
+    await read;
+    recovered=true;
+    expect(await adapter.read(id,20_000)).toEqual({state:"complete",text:"Reply"});
+    expect(sends).toBe(1);
     adapter.dispose();
   } finally { vi.useRealTimers(); }
 });

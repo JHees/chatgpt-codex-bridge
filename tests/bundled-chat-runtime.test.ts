@@ -69,6 +69,21 @@ it("adapts existing stream callbacks and native conversation routes without a se
   expect(f.http.safeDelete).toHaveBeenCalledExactlyOnceWith("/conversation/id/{conversation_id}", { parameters });
 });
 
+it("selects the chat catalog from the native chat/gizmo/merged query factory without placeholder data", async () => {
+  const source = bundledSource.replace(
+    'catalogState=query(app,()=>({placeholderData:empty,queryFn:()=>http.safeGet(`/models`,{parameters:{query:{iim:!1,include_icons:!1}}}).then(normalize),queryKey:[`chatgpt-models`]}));',
+    'function modelQuery(kind){return{queryFn:()=>http.safeGet(`/models`,{parameters:{query:{is_gizmo:kind===`gizmo`,merged:kind===`merged`||void 0}}}).then(normalize),queryKey:kind===`chat`?[`chatgpt-models`]:[`chatgpt-models`,kind]}}catalogState=query(app,()=>modelQuery(`chat`)),gizmoState=query(app,()=>modelQuery(`gizmo`)),mergedState=query(app,()=>modelQuery(`merged`));',
+  );
+  const f = fixture(source);
+  const runtime = await discoverAppChatRuntime(f.environment);
+  expect(await runtime.client.models()).toEqual({ options: [] });
+  expect(f.fetchModels).toHaveBeenCalledOnce();
+  expect(f.stream.startCompletionStream).not.toHaveBeenCalled();
+  const missingChat = fixture(source.replace('modelQuery(`chat`)', 'modelQuery(`merged`)'));
+  await expect(discoverAppChatRuntime(missingChat.environment)).rejects.toMatchObject({ code: "APP_UNSUPPORTED" });
+  expect(missingChat.environment.importModule).not.toHaveBeenCalled();
+});
+
 it("rejects missing and ambiguous bundled bindings before importing or sending", async () => {
   for (const source of [bundledSource.replace("catalogState as c", "unrelated as c"), bundledSource + bundledSource]) {
     const f = fixture(source);

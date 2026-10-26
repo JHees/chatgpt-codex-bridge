@@ -2,96 +2,92 @@ import { expect, it, vi } from "vitest";
 import { AppChatBackgroundAdapter, type NativeCompletionInput } from "../packages/renderer-plugin/src/background-adapter.js";
 import type { AppChatClient } from "../packages/renderer-plugin/src/app-chat-runtime.js";
 import { ChatConfiguration } from "../packages/renderer-plugin/src/chat-configuration.js";
-import { CooperationController } from "../packages/renderer-plugin/src/cooperation-controller.js";
-import { PROTOCOL } from "../packages/renderer-plugin/src/protocol.js";
+import { BridgeSession } from "../packages/renderer-plugin/src/session.js";
 
-it.each(["manual-message", "regeneration", "changed-branch", "unchanged"])("revalidates paused native results before resuming: %s", async change => {
-  let now = 0, sends = 0;
+function fixture() {
+  const task = { hostId: "local", taskId: "task" };
+  const configuration = new ChatConfiguration();
+  configuration.updateCatalog({ options: [{ slug: "planner-pro", lane: "pro", modelTitle: "Planner Pro", selectedLabel: "Pro" }] });
+  configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, cleanup: "retain" });
   const mapping: Record<string, unknown> = {};
+  const sent: NativeCompletionInput[] = [];
   let current = "root";
-  let stream = "COMPLETE";
   const client: AppChatClient = {
-    models: async () => ({}), delete: async () => { throw Error("Must retain this conversation"); },
-    getConversationStreamStatus: async () => ({ status: stream }),
-    get: async () => { now = Math.max(now, 60_001); return { current_node: current, mapping }; },
+    models: async () => ({}), get: async () => ({ current_node: current, mapping }),
+    getConversationStreamStatus: async () => ({ status: "COMPLETE" }), delete: vi.fn(),
     startCompletionStream: async input => {
-      sends++;
-      const native = input as NativeCompletionInput, user = native.request.messages[0]!;
-      mapping[user.id] = { parent: "root", message: user };
-      const text = '```codex-bridge-response-v1\n' + JSON.stringify({ protocol: PROTOCOL, sessionId: "session", turnId: "turn", status: "continue", summary: "Inspect the requested document", actions: [{ id: "a1", type: "inspect", instruction: "Read the document", expectedResult: "Report its current sections" }] }) + '\n```';
-      current = "assistant";
-      mapping[current] = { parent: user.id, message: { id: current, author: { role: "assistant" }, end_turn: true, content: { parts: [text] } } };
-      native.onRequestStart(); native.onUpdate({ type: "message", conversationId: "owned", message: { id: current } }); native.onComplete({ reason: "done" });
+      const native = input as NativeCompletionInput;
+      sent.push(native);
+      native.onRequestStart();
     },
   };
-  const configuration = new ChatConfiguration();
-  configuration.updateCatalog({ options: [{ slug: "planner", lane: "thinking", modelTitle: "Planner", selectedLabel: "Medium", thinkingEffort: "standard" }] });
-  const task = { hostId: "local", taskId: "task" };
-  configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, replyTimeoutMinutes: 1 });
-  const controller = new CooperationController(configuration, () => ({ state: "accepted", bindingId: "binding", ...task, turnId: "native-turn" }), () => new AppChatBackgroundAdapter(client, () => true), () => now);
-  const config = controller.prepare(task, "snapshot"); controller.register("binding", task, config);
-  const payload = { task, bindingId: "binding", snapshotId: config.id, request: { protocol: PROTOCOL, sessionId: "session", turnId: "turn", kind: "request", objective: "Inspect a document", state: { phase: "plan", summary: "Ready", completed: [], blockers: [] }, message: "Choose the first check", actionResults: [] } };
+  const session = new BridgeSession(configuration, () => new AppChatBackgroundAdapter(client, () => true));
+  const complete = (text: string) => {
+    const native = sent.at(-1)!;
+    const user = native.request.messages[0]!;
+    mapping[user.id] = { parent: current, message: user };
+    current = "reply-" + sent.length;
+    mapping[current] = { parent: user.id, message: { id: current, author: { role: "assistant" }, end_turn: true, content: { parts: [text] } } };
+    native.onUpdate({ conversationId: "owned-chat", type: "message", message: { id: current } });
+    native.onComplete({ reason: "done" });
+  };
+  return { task, session, sent, client, complete };
+}
+
+it("exchanges ordinary plans and evidence through one native Pro chat without text protocol or handoff IDs", async () => {
+  const f = fixture();
   try {
-    expect((await controller.exchange(payload)).state).toBe("paused");
-    if (change === "manual-message") {
-      mapping.manual = { parent: current, message: { id: "manual", author: { role: "user" }, content: { parts: ["I have changed the task"] } } };
-      current = "manual";
-    } else if (change === "regeneration") stream = "IN_PROGRESS";
-    else if (change === "changed-branch") current = "another-reply";
-    controller.consent(task, "session", "continue-waiting");
-    if (change === "unchanged") {
-      expect(await controller.exchange(payload)).toMatchObject({ state: "response", response: { actions: [{ id: "a1" }] } });
-      expect(await controller.exchange(payload)).toEqual({ state: "already-delivered", turnId: "turn" });
-    } else {
-      await expect(controller.exchange(payload)).rejects.toMatchObject({ code: "USER_INTERVENED" });
-      await expect(controller.finish({ task, sessionId: "session", policy: "retain" })).resolves.toEqual({ state: "ended", policy: "retain" });
-    }
-    expect(sends).toBe(1);
-  } finally { controller.stop(); }
+    const first = { task: f.task, instanceId: f.session.instanceId, requestId: "request-1", message: "Review the current design." };
+    const waiting = f.session.exchange(first);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.complete("The model and training loop are separate. Check the factory extension point.");
+    const reply = await waiting;
+    expect(reply).toMatchObject({ state: "reply", requestId: "request-1", text: expect.stringContaining("factory") });
+    expect(f.sent[0]!.request).toMatchObject({ model: "planner-pro" });
+    expect(f.sent[0]!.request).not.toHaveProperty("thinking_effort");
+    expect(f.sent[0]!.request.messages[0]!.content.parts[0]).toContain("Reply in concise plain text.");
+    expect(f.sent[0]!.request.messages[0]!.content.parts[0]).toMatch(/Review the current design\.$/);
+    expect(await f.session.exchange(first)).toMatchObject({ state: "reply", text: reply.text });
+    expect(f.sent).toHaveLength(1);
+    const next = f.session.exchange({ task: f.task, instanceId: f.session.instanceId, sessionId: reply.sessionId, requestId: "request-2", message: "Verified: adding a model changes only the explicit factory registration. Tests passed." });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(f.sent[1]!.request).toMatchObject({ conversation_id: "owned-chat", parent_message_id: "reply-1" });
+    f.complete("The evidence supports the review. The task is complete.");
+    expect(await next).toMatchObject({ state: "reply", requestId: "request-2" });
+    expect(await f.session.finish({ task: f.task, sessionId: reply.sessionId, reason: "completed" })).toMatchObject({ state: "ended", policy: "retain" });
+    expect(f.client.delete).not.toHaveBeenCalled();
+  } finally { f.session.stop(); }
 });
 
-it.each([null, 1])("continues a slow native startup on the identical business turn with deadline %s", async replyTimeoutMinutes => {
+it("keeps waiting on the original native request through slow startup without replay", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  let controller: CooperationController | undefined;
+  const f = fixture();
   try {
-    let sends = 0, current = "root";
-    const mapping: Record<string, unknown> = {};
-    const client: AppChatClient = {
-      models: async () => ({}), delete: async () => {},
-      getConversationStreamStatus: async () => ({ status: "COMPLETE" }),
-      get: async () => ({ current_node: current, mapping }),
-      startCompletionStream: input => {
-        sends++;
-        const native = input as NativeCompletionInput, user = native.request.messages[0]!;
-        setTimeout(() => {
-          native.onRequestStart();
-          mapping[user.id] = { parent: "root", message: user };
-          current = "reply";
-          mapping.reply = { parent: user.id, message: { id: "reply", author: { role: "assistant" }, end_turn: true, content: { parts: ["Bridge status: continue\nInspect the fixture and report evidence."] } } };
-          native.onUpdate({ conversationId: "owned", type: "message", message: { id: "reply" } });
-          native.onComplete({ reason: "done" });
-        }, 110_000);
-        return new Promise(() => {});
-      },
-    };
-    const configuration = new ChatConfiguration(), task = { hostId: "local", taskId: "task" };
-    configuration.updateCatalog({ options: [{ slug: "planner", lane: "thinking", modelTitle: "Planner", selectedLabel: "High", thinkingEffort: "extended" }] });
-    configuration.updateTask(task, { enabled: true, modelKey: configuration.models()[0]!.key, replyTimeoutMinutes });
-    controller = new CooperationController(configuration, () => ({ state: "accepted", bindingId: "binding", ...task, turnId: "native-turn" }), () => new AppChatBackgroundAdapter(client, () => true));
-    const config = controller.prepare(task, "snapshot"); controller.register("binding", task, config);
-    const payload = { task, bindingId: "binding", snapshotId: config.id, request: { protocol: PROTOCOL, sessionId: "session", turnId: "turn", kind: "request", objective: "Inspect the fixture", state: { phase: "plan", summary: "Ready", completed: [], blockers: [] }, message: "Choose the check", actionResults: [] } };
-    const first = controller.exchange(payload).then(result => ({ result }), error => ({ error }));
-    await vi.advanceTimersByTimeAsync(100_000);
-    expect(await first).toMatchObject({ result: { state: replyTimeoutMinutes === null ? "waiting" : "paused" } });
-    const second = controller.exchange(payload);
-    await vi.advanceTimersByTimeAsync(10_000);
-    if (replyTimeoutMinutes === null) expect(await second).toMatchObject({ state: "response", response: { status: "continue" } });
-    else {
-      expect(await second).toMatchObject({ state: "paused" });
-      controller.consent(task, "session", "continue-waiting");
-      expect(await controller.exchange(payload)).toMatchObject({ state: "response", response: { status: "continue" } });
-    }
-    expect(controller.status({ task }).active).toMatchObject({ usedRequests: 1, errorCode: null });
-    expect(sends).toBe(1);
-  } finally { controller?.stop(); vi.useRealTimers(); }
+    f.client.startCompletionStream = input => { f.sent.push(input as NativeCompletionInput); return new Promise(() => {}); };
+    const payload = { task: f.task, instanceId: f.session.instanceId, requestId: "slow", message: "Review carefully." };
+    const first = f.session.exchange(payload);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await first).toMatchObject({ state: "waiting", requestId: "slow" });
+    const second = f.session.exchange(payload);
+    await vi.advanceTimersByTimeAsync(0);
+    f.sent[0]!.onRequestStart();
+    f.complete("Reviewed.");
+    expect(await second).toMatchObject({ state: "reply", text: "Reviewed." });
+    expect(f.sent).toHaveLength(1);
+  } finally { f.session.stop(); vi.useRealTimers(); }
+});
+
+it("shows a real native failure and never resends an uncertain request", async () => {
+  const f = fixture();
+  try {
+    const payload = { task: f.task, instanceId: f.session.instanceId, requestId: "failed", message: "Inspect the source." };
+    const first = f.session.exchange(payload);
+    const rejected = expect(first).rejects.toMatchObject({ code: "CHAT_RATE_LIMITED" });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.sent[0]!.onError({ responseStatus: 429 });
+    await rejected;
+    expect(f.session.status({ task: f.task }).error).toMatchObject({ code: "CHAT_RATE_LIMITED" });
+    expect(await f.session.exchange(payload)).toMatchObject({ state: "failed", errorCode: "CHAT_RATE_LIMITED" });
+    expect(f.sent).toHaveLength(1);
+  } finally { f.session.stop(); }
 });

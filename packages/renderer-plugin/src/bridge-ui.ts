@@ -1,11 +1,20 @@
-import type { ChatSettings, ComposerIdentity, PreparedConfiguration } from "./chat-configuration.js";
-import type { CooperationController } from "./cooperation-controller.js";
+import type { ChatSettings, ComposerIdentity } from "./chat-configuration.js";
+import type { BridgeSession } from "./session.js";
 import type { ComposerHandle, LoaderApi } from "./loader-interface.js";
 import { menuIcon, modelLabel, mountModelMenu } from "./model-menu.js";
 import { bridgeStyle } from "./bridge-style.js";
 import { mountContextPresentation } from "./context-presentation.js";
 
 export const DEFAULTS_KEY = "collaboration-defaults-v2";
+const errorMessages: Record<string, [string, string]> = {
+  APP_UNSUPPORTED: ["Chat 接口不可用。点“诊断”刷新；如果仍失败，请更新 Bridge。", "The Chat interface is unavailable. Refresh diagnostics; update Bridge if it persists."],
+  CHAT_MODELS_UNAVAILABLE: ["没有读取到可用模型。点“诊断”刷新模型列表。", "No available models were found. Refresh the model list in diagnostics."],
+  CHAT_CONNECT_TIMEOUT: ["连接 Chat 超时。点“诊断”后可安全重试同一请求。", "Connecting to Chat timed out. Refresh diagnostics, then retry the same request."],
+  CHAT_READ_TIMEOUT: ["读取回复超时。使用相同 requestId 继续读取，别新建请求。", "Reading the reply timed out. Continue with the same requestId; do not create a new request."],
+  SEND_UNCERTAIN: ["发送结果未确认。先用 status 检查；不要重发。", "Delivery is unconfirmed. Check status first; do not resend."],
+  SESSION_LOST: ["Bridge 会话已变化，旧请求不能恢复。先检查 Chat 记录，不要重发旧请求。", "The Bridge session changed and the old request cannot be resumed. Check Chat before starting another request."],
+  BUDGET_EXHAUSTED: ["已达到本任务请求上限。调整任务限制，或结束当前协作。", "The task request limit was reached. Change its limit or finish this collaboration."],
+};
 
 export function bundledSkillDiagnostics(zh = false) {
   return { bundledSkill: "loader-managed-unverified", bundledSkillNote: zh
@@ -21,15 +30,13 @@ export class BridgeUi {
   private stopContextPresentation: (() => void) | undefined;
   private readonly timers = new Set<ReturnType<typeof setInterval>>();
   private readonly accessoryUpdates = new Map<string, () => void>();
-  private readonly prepared = new Map<string, { bindingId: string; config: Readonly<PreparedConfiguration> }>();
-  private readonly blockedPreparation = new Set<string>();
   private lastError: string | null = null;
   private backgroundError: string | null = null;
   private stopped = false;
   private readonly css: HTMLStyleElement;
   private get zh(): boolean { return /^zh/i.test(this.document.documentElement.lang || navigator.language); }
 
-  constructor(private readonly document: Document, private readonly api: LoaderApi, private readonly control: CooperationController,
+  constructor(private readonly document: Document, private readonly api: LoaderApi, private readonly control: BridgeSession,
     private readonly refreshModels: () => Promise<void>) {
     this.css = document.createElement("style"); this.css.textContent = bridgeStyle;
   }
@@ -45,38 +52,33 @@ export class BridgeUi {
   private error(error: unknown): void {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "BRIDGE_UNAVAILABLE";
     this.lastError = /^[A-Z_]{1,64}$/.test(code) ? code : "BRIDGE_UNAVAILABLE";
-    for (const element of this.document.querySelectorAll("[data-bridge-error]")) element.textContent = this.lastError;
+    for (const element of this.document.querySelectorAll("[data-bridge-error]")) {
+      element.setAttribute("data-bridge-error", this.lastError); element.textContent = this.errorText(this.lastError);
+    }
   }
+  private errorText(code: string): string { return `${this.t(...errorMessages[code] ?? ["Bridge 出错了。请根据错误码排查。", "Bridge failed. Use the error code to diagnose it."])} (${code})`; }
 
   start(): void {
     this.document.head.append(this.css);
     this.stopContextPresentation = mountContextPresentation(this.document, this.zh);
-    this.page = this.api.settings?.registerPage({ id: "main", title: "Bridge", description: this.t("后台规划与任务执行协作", "Background planning and task execution"), render: root => {
+    this.page = this.api.settings?.registerPage({ id: "main", title: "Bridge", iconSvg: menuIcon(this.document, "bridge").outerHTML, description: this.t("后台规划与任务执行协作", "Background planning and task execution"), render: root => {
       root.classList.add("bridge-controls"); this.renderDefaults(root);
       return () => { this.closeQuick?.(); root.replaceChildren(); root.classList.remove("bridge-controls", "bridge-settings"); };
     } });
-    this.handle = this.api.composer?.registerAccessory({ id: "collaboration", render: (root, owner) => this.renderAccessory(root, owner),
-      onChange: event => {
-        if (this.stopped || event.target !== "context" || event.action !== "removed" || !this.ownsMountedContext(event.identity)) return;
-        this.control.setEnabled(event.identity, false);
-        const key = JSON.stringify(event.identity);
-        this.prepared.delete(key); this.blockedPreparation.delete(key); this.closeQuick?.(); this.accessoryUpdates.get(key)?.();
-      },
-    });
+    this.handle = this.api.composer?.registerAccessory({ id: "collaboration", render: (root, owner) => this.renderAccessory(root, owner) });
     this.refreshDiagnostics();
   }
-  receipt(bindingId: string): unknown { return this.handle?.getSubmission?.(bindingId) ?? { state: "unavailable" }; }
   backgroundChanged(code: string | null, recovering = false): void {
     this.backgroundError = code && /^[A-Z_]{1,64}$/.test(code) ? code : null;
     for (const element of this.document.querySelectorAll("[data-bridge-background]")) element.textContent = this.backgroundError
-      ? `${this.backgroundError}${recovering ? this.t(" · 正在自动恢复连接", " · Reconnecting automatically") : ""}` : "";
+      ? `${this.errorText(this.backgroundError)}${recovering ? this.t(" · 正在自动恢复连接", " · Reconnecting automatically") : ""}` : "";
     this.refreshDiagnostics();
   }
   private ownsMountedContext(owner: ComposerIdentity): boolean {
     const current = this.handle?.getStatus();
     return !!current?.available && ("draftId" in owner ? current.draftId === owner.draftId : current.hostId === owner.hostId && current.taskId === owner.taskId);
   }
-  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareSubmission === "function", mounted: this.handle?.getStatus().available ?? false, contextPresentation: this.handle?.getStatus().context?.display ?? "text", errorCode: this.lastError,
+  compatibility() { return { settings: !!this.page, composer: typeof this.handle?.prepareContext === "function", mounted: this.handle?.getStatus().available ?? false, errorCode: this.lastError,
     ...bundledSkillDiagnostics(this.zh) }; }
 
   private diagnosticsText(): string {
@@ -97,7 +99,7 @@ export class BridgeUi {
       try { this.api.storage.set(DEFAULTS_KEY, selected); }
       catch (error) { this.control.configuration.saveDefaults(previous); throw error; }
     });
-    const note = this.node("p", this.t("默认值用于新任务；已有任务记住自己的开关和模型选择。重载仅恢复偏好，不恢复或重发协作请求。", "Defaults apply to new tasks; existing tasks remember their switches and model choices. Reload restores preferences, not collaboration requests.")); note.className = "bridge-note";
+    const note = this.node("p", this.t("新任务默认关闭协作；请先创建任务，再在该任务的输入区明确开启。", "New tasks start with collaboration off. Create the task first, then explicitly enable Bridge in its composer.")); note.className = "bridge-note";
     root.append(form, note);
     const diagnostics = this.node("p", this.diagnosticsText()); diagnostics.dataset.bridgeDiagnostics = "true";
     const refresh = this.button(this.t("诊断", "Diagnose"), async () => {
@@ -105,7 +107,7 @@ export class BridgeUi {
       try { await this.refreshModels(); if (root.isConnected) this.renderDefaults(root); }
       finally { refresh.disabled = false; }
     });
-    const error = this.node("p", this.lastError ?? ""); error.dataset.bridgeError = "true"; error.setAttribute("role", "status");
+    const error = this.node("p", this.lastError ? this.errorText(this.lastError) : ""); error.dataset.bridgeError = this.lastError ?? ""; error.setAttribute("role", "status");
     const background = this.node("p", this.backgroundError ?? ""); background.dataset.bridgeBackground = "true"; background.setAttribute("role", "status");
     const health = this.node("section"); health.className = "bridge-diagnostics";
     const row = this.node("div"); row.className = "bridge-row";
@@ -129,7 +131,7 @@ export class BridgeUi {
         status.textContent = this.t("已自动保存；活动协作中的参数不变。", "Saved automatically; active collaboration settings are unchanged.");
         return true;
       } catch (error) {
-        this.error(error); status.textContent = `${this.t("未保存", "Not saved")} · ${this.lastError}`;
+        this.error(error); status.textContent = `${this.t("未保存", "Not saved")} · ${this.errorText(this.lastError ?? "BRIDGE_UNAVAILABLE")}`;
         return false;
       }
     };
@@ -142,9 +144,6 @@ export class BridgeUi {
       if (description) { const detail = this.node("span", description); detail.className = "bridge-row-description"; copy.append(detail); }
       row.append(copy, control); section.append(row);
     };
-    const enabled = this.node("input"); enabled.type = "checkbox"; enabled.setAttribute("role", "switch"); enabled.checked = value.enabled;
-    enabled.onchange = () => { if (!commit({ enabled: enabled.checked })) enabled.checked = value.enabled; };
-    label(this.t("新任务默认启用", "Enable for new tasks"), enabled, this.t("由 Chat 规划，当前 Codex 执行与验证。", "Chat plans; the current Codex task executes and verifies."));
     const choice = <T extends string | number>(title: string, options: readonly {value: T; label: string}[], current: () => T, change: (next: T) => void): HTMLButtonElement => {
       const trigger = this.button("", () => {
         const popup = this.openPopup(trigger, title); if (!popup) return;
@@ -210,13 +209,17 @@ export class BridgeUi {
 
   private renderAccessory(root: HTMLElement, owner: ComposerIdentity): () => void {
     root.classList.add("bridge-controls");
-    const key = JSON.stringify(owner);
-    const button = this.button("Bridge", () => this.openTask(owner, button)); button.className = "bridge-compact";
+    const taskKey = JSON.stringify(owner);
+    let contextAttempted = false;
+    const button = this.button("Bridge", () => {
+      if (["idle", "missing-or-edited"].includes(this.handle?.getStatus().context?.state ?? "idle")) contextAttempted = false;
+      this.accessoryUpdates.get(taskKey)?.(); this.openTask(owner, button);
+    }); button.className = "bridge-compact";
     button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-expanded", "false"); root.append(button);
     const update = (): void => {
       if (this.stopped || !root.isConnected) return;
-      if (typeof this.handle?.prepareSubmission !== "function") {
-        button.textContent = this.t("Bridge：需要兼容的 Loader 输入区接口", "Bridge: compatible Loader composer required");
+      if (typeof this.handle?.prepareContext !== "function") {
+        button.textContent = this.t("Bridge：输入区接口不可用", "Bridge: composer unavailable");
         button.title = button.textContent; return;
       }
       const settings = this.control.configuration.task(owner);
@@ -225,49 +228,30 @@ export class BridgeUi {
       const selected = this.control.configuration.models().find(model => model.key === settings.modelKey);
       const model = active?.config.model ?? selected;
       const name = model ? modelLabel(model) : this.t("未选模型", "Choose model");
-      const clock = (ms: number): string => `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
-      const waiting = active?.state === "waiting" || active?.state === "paused";
-      button.textContent = active ? `${this.stateLabel(active.state)} · ${name}${waiting ? ` · ${clock(active.elapsedMs ?? 0)}${active.allowedMs == null ? "" : ` / ${clock(active.allowedMs)}`}` : ""}` : settings.enabled ? name : this.t("Chat 协作: 关", "Chat collaboration: off");
-      if (!active && settings.enabled && status?.connection) button.textContent = `${this.t("等待 Codex 接入", "Waiting for Codex to connect")} · ${name}`;
-      if (this.blockedPreparation.has(key)) button.textContent = this.t("旧协作说明需重新准备", "Saved collaboration instructions need renewal");
+      const state = active?.state ?? status?.error?.code ?? (settings.enabled ? name : this.t("Chat 协作：关", "Chat: off"));
+      button.textContent = active ? `${state} · ${name}` : state;
       button.title = button.textContent;
-      const prepared = this.prepared.get(key);
-      // Do not re-add a removed/edited instruction. Only a positively accepted submission ends this preparation.
-      if (prepared && (this.receipt(prepared.bindingId) as { state?: string }).state === "accepted") this.prepared.delete(key);
-      if (settings.enabled && settings.modelKey !== null && !this.prepared.has(key) && !this.blockedPreparation.has(key) && !active && !status?.pendingCleanup.length && typeof this.handle?.prepareSubmission === "function") {
-        try { this.prepare(owner); } catch (error) { this.error(error); }
+      const activeOwner = "draftId" in owner ? undefined : { hostId: owner.hostId, taskId: owner.taskId };
+      const context = this.handle?.getStatus().context;
+      if (!settings.enabled) {
+        contextAttempted = false;
+        if (context?.state === "prepared") this.handle.clearContext();
+      }
+      if (settings.enabled && activeOwner && model && !contextAttempted && context?.state !== "prepared") {
+        contextAttempted = true;
+        try {
+          this.handle.prepareContext({ ...activeOwner, revision: "bridge-enabled", text: this.t(
+            "当前任务已启用 Bridge。使用随包 bridge-chat skill。Chat 提供建议，Codex 审查并执行；按现有权限操作。用 status 读取任务、模型和会话状态。",
+            "Bridge is enabled for this task. Use the bundled bridge-chat skill. Chat advises; Codex reviews and executes under existing permissions. Read task, model and session state with status.") });
+          this.lastError = null;
+        } catch (error) { this.error(error); }
       }
     };
     // Loader can call render synchronously before returning its handle.
-    this.accessoryUpdates.set(key, update);
+    this.accessoryUpdates.set(taskKey, update);
     queueMicrotask(update);
     const timer = setInterval(update, 1000); this.timers.add(timer);
-    return () => { this.accessoryUpdates.delete(key); this.blockedPreparation.delete(key); this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
-  }
-  private stateLabel(state: string): string {
-    if (state === "ending") return this.t("正在结束协作", "Ending collaboration");
-    if (state === "repair-required") return this.t("等待 Codex 续读修复回复", "Waiting for Codex to continue repair");
-    if (state === "awaiting-verification") return this.t("Chat 已回复 · 待 Codex 核对", "Chat replied · Codex review pending");
-    if (state === "actions-returned") return this.t("Chat 已回复 · 待 Codex 处理", "Chat replied · Codex action pending");
-    const labels: Record<string, [string, string]> = { "waiting": ["正在等待 Chat", "Waiting for Chat"], "paused": ["等待你确认", "Waiting for confirmation"], "needs-user": ["等待你确认", "Waiting for confirmation"], "cleanup-failed": ["会话清理失败", "Cleanup failed"], "failed": ["协作已停止", "Collaboration stopped"] };
-    const label = labels[state]; return label ? this.t(...label) : this.t("协作已接入", "Collaboration connected");
-  }
-  private prepare(owner: ComposerIdentity): void {
-    const config = this.control.prepare(owner, `snapshot-${crypto.randomUUID()}`);
-    const text = this.t(
-      `使用随包 bridge-chat skill 协作：Chat 负责技术决策和验收，Codex 审核后执行并回报证据；沿用现有权限，接入失败时暂停。Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}。配置 ${config.id}；其余参数由 status 读取。`,
-      `Use the bundled bridge-chat skill: Chat leads decisions and verification; Codex reviews, executes and reports evidence under existing permissions. Pause if connection fails. Chat ${config.model.title} · ${config.model.mode} · ${config.model.effortLabel}. Configuration ${config.id}; read remaining parameters with status.`);
-    const summary = this.handle?.getStatus().contextDisplay === "collapsed-v1" ? this.t("Chat 协作", "Chat collaboration") + ` · ${config.model.title} · ${config.model.effortLabel}` : undefined;
-    let receipt;
-    try { receipt = this.handle!.prepareSubmission({ ...owner, revision: config.id, text, ...(summary ? {summary} : {}) }); }
-    catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "CONTEXT_EXISTS") this.blockedPreparation.add(JSON.stringify(owner));
-      throw error;
-    }
-    this.control.register(receipt.bindingId, owner, config);
-    this.prepared.set(JSON.stringify(owner), { bindingId: receipt.bindingId, config });
-    this.lastError = null;
-    for (const element of this.document.querySelectorAll("[data-bridge-error]")) element.textContent = "";
+    return () => { this.accessoryUpdates.delete(taskKey); this.closeQuick?.(); clearInterval(timer); this.timers.delete(timer); root.replaceChildren(); root.classList.remove("bridge-controls"); };
   }
   private openPopup(anchor: HTMLButtonElement, title: string, available: () => boolean = () => true) {
     const wasOpen = anchor.getAttribute("aria-expanded") === "true";
@@ -309,131 +293,69 @@ export class BridgeUi {
     const { panel, close, position } = popup;
     const row = (text: string, control: HTMLElement): void => { const label = this.node("label"); label.className = "bridge-quick-row"; label.append(this.node("span", text), control); panel.append(label); };
     const value = { ...this.control.configuration.task(owner) };
-    const active = "draftId" in owner ? null : this.control.status({ task: owner }).active;
+    const status = "draftId" in owner ? null : this.control.status({ task: owner });
+    const active = status?.active ?? null;
     const apply = (): void => {
       if (!this.ownsMountedContext(owner)) { close(); return; }
       try {
-        this.control.configuration.updateTask(owner, value); this.control.setEnabled(owner, value.enabled);
-        this.handle?.clearContext(); this.prepared.delete(JSON.stringify(owner)); this.blockedPreparation.delete(JSON.stringify(owner));
-        if (value.enabled && value.modelKey !== null && !active) this.prepare(owner);
-      } catch (error) { this.error(error); }
+        this.control.updateTask(owner, value);
+        Object.assign(value, this.control.configuration.task(owner));
+        if (!value.enabled && this.handle?.getStatus().context?.state === "prepared") this.handle.clearContext();
+        this.accessoryUpdates.get(JSON.stringify(owner))?.();
+      }
+      catch (error) { this.error(error); throw error; }
     };
     const enabled = this.node("input"); enabled.type = "checkbox"; enabled.setAttribute("role", "switch"); enabled.checked = value.enabled;
-    enabled.onchange = () => { value.enabled = enabled.checked; apply(); };
-    row(this.t("Chat 协作", "Chat collaboration"), enabled);
+    enabled.disabled = "draftId" in owner || !this.control.configuration.models().some(model => model.key === value.modelKey);
+    enabled.onchange = () => {
+      if (enabled.disabled) return;
+      value.enabled = enabled.checked; apply(); close();
+    };
+    row(this.t("本任务 Chat 协作", "Enable Bridge for this task"), enabled);
+    if (enabled.disabled) {
+      const note = this.node("p", this.t("draftId" in owner ? "请先创建任务，再为该任务开启 Bridge。" : "请先选择可用的 Chat 模型。",
+        "draftId" in owner ? "Create the task first, then enable Bridge for it." : "Choose an available Chat model first."));
+      note.className = "bridge-note"; panel.append(note);
+    }
     const models = this.control.configuration.models();
-    const heading = this.node("div", this.t("规划模型", "Planning model")); heading.className = "bridge-menu-heading"; panel.append(heading);
+    const heading = this.node("div", this.t("Chat 模型", "Chat model")); heading.className = "bridge-menu-heading"; panel.append(heading);
     popup.cleanup(mountModelMenu(panel, models, () => value.modelKey,
-      () => models.find(model => model.key === this.control.configuration.defaults().modelKey) ?? models.find(model => model.key === value.modelKey),
+      () => models.find(model => model.key === value.modelKey),
       model => { value.modelKey = model.key; apply(); }, close, this.zh));
     const divider = this.node("div"); divider.className = "bridge-quick-divider"; panel.append(divider);
-    const footer = this.node("div"); footer.className = "bridge-quick-footer";
-    footer.append(this.button(this.t("恢复默认", "Reset defaults"), () => {
+    panel.append(this.button(this.t("恢复默认", "Reset defaults"), () => {
       if (!this.ownsMountedContext(owner)) { close(); return; }
-      Object.assign(value, this.control.configuration.defaults()); apply(); close(); this.openTask(owner, anchor);
+      this.control.restoreDefaults(owner); close(); this.openTask(owner, anchor);
     }), this.button(this.t("Bridge 设置", "Bridge settings"), async () => {
       if (!this.page?.open) { this.error({ code: "SETTINGS_NAVIGATION_UNAVAILABLE" }); return; }
       try { await this.page.open(); close(); }
       catch (error) { this.error(error); }
     }));
-    panel.append(footer);
-    if (this.blockedPreparation.has(JSON.stringify(owner)) && !active) {
-      panel.append(this.node("p", this.t("草稿中的旧说明未被改写。重新准备只替换 Bridge 说明，其余草稿保持原样。", "Saved instructions were left untouched. Preparing fresh instructions replaces only the Bridge block.")),
-        this.button(this.t("重新准备协作说明", "Prepare fresh collaboration instructions"), () => { apply(); close(); }));
-    }
-    let stateNode: HTMLParagraphElement | undefined;
-    const consentButtons = new Map<string, HTMLButtonElement>();
-    const localEndButtons = new Map<string, HTMLButtonElement>();
-    const endActions = (sessionId: string, failed: boolean): HTMLDivElement => {
-      const actions = this.node("div"); actions.className = "bridge-actions";
-      if ("draftId" in owner) return actions;
-      const note = this.node("p"); note.className = "bridge-quick-state"; note.setAttribute("role", "status");
-      const end = async (localOnly: boolean): Promise<void> => {
-        if (!this.ownsMountedContext(owner)) { close(); return; }
-        for (const button of actions.querySelectorAll("button")) button.disabled = true;
-        note.textContent = this.t("正在结束协作…", "Ending collaboration…");
-        try {
-          if (localOnly) await this.control.abandonFromUi({task:owner,sessionId});
-          else await this.control.endFromUi({task:owner,sessionId,policy:this.control.configuration.defaults().cleanup});
-          if (!this.control.status({task:owner}).active) {
-            this.control.setEnabled(owner, false);
-            this.prepared.delete(JSON.stringify(owner)); this.blockedPreparation.delete(JSON.stringify(owner));
-            if (this.ownsMountedContext(owner)) this.handle?.clearContext();
-          }
-          close();
-        } catch (error) {
-          const current = this.control.status({task:owner});
-          fallback.hidden = !(current.active?.sessionId === sessionId && current.active.state === "cleanup-failed"
-            || current.pendingCleanup.some(entry => entry.sessionId === sessionId));
-          note.textContent = this.t("Chat 处理失败。可重试，或直接结束 Bridge，不再处理 Chat。已发出的请求可能仍会完成。", "Chat cleanup failed. Retry or end Bridge only. An already-sent request may still complete.");
-          throw error;
-        } finally { for (const button of actions.querySelectorAll("button")) button.disabled = false; position(); }
-      };
-      const fallback = this.button(this.t("直接结束 Bridge", "End Bridge only"), () => end(true));
-      fallback.hidden = !failed; localEndButtons.set(sessionId, fallback);
-      actions.append(this.button(this.t("结束", "End"), () => end(false)), fallback, note);
-      return actions;
-    };
-    if (!("draftId" in owner)) {
-      const diagnostics = this.node("p"); diagnostics.className = "bridge-quick-state"; diagnostics.setAttribute("role", "status"); panel.append(diagnostics);
-      diagnostics.style.whiteSpace = "pre-line";
-      const update = (): void => {
-        if (!this.ownsMountedContext(owner)) { close(); return; }
-        const current = this.control.status({ task: owner }), lines: string[] = [];
-        // Session-bound controls must not outlive their owner or target a replacement session.
-        if (current.active?.sessionId !== active?.sessionId) { close(); return; }
-        for (const [sessionId, button] of localEndButtons) button.hidden = !(current.active?.sessionId === sessionId && current.active.state === "cleanup-failed"
-          || current.pendingCleanup.some(entry => entry.sessionId === sessionId));
-        if (current.active) {
-          if (stateNode) stateNode.textContent = `${this.stateLabel(current.active.state)} · ${this.t("已发送请求", "Requests sent")}: ${current.active.usedRequests}`;
-          for (const [action, button] of consentButtons) button.hidden = action === "remove-request-limit"
-            ? current.active.maxRequests === null || current.active.busy || current.active.turnId !== undefined
-            : current.active.state !== "paused";
-          lines.push(current.active.remainingRequests === null ? this.t("自动推进到任务完成", "Working until task completion") : `${this.t("剩余请求", "Remaining requests")}: ${current.active.remainingRequests} · ${this.t("最终反馈计入上限", "Final feedback counts toward the limit")}`);
-          if (current.active.longWait && current.active.state === "waiting") lines.push(this.t("等待较久，尚未收到可验证回复；可以随时停止。", "Long wait: no verified reply yet. You can stop at any time."));
-          if (current.active.state === "needs-user") lines.push(this.t("请在当前任务中回答问题，Codex 会回传答案。", "Reply in the current task; Codex will return your answer."));
-        }
-        if (current.lastReply) {
-          const { elapsedMs, repairCount, round } = current.lastReply;
-          lines.push(this.t(`最近回复：${(elapsedMs / 1000).toFixed(1)} 秒 · 格式修复 ${repairCount} 次 · 第 ${round} 次请求`, `Last reply: ${(elapsedMs / 1000).toFixed(1)} s · ${repairCount} format repairs · request ${round}`));
-        }
-        diagnostics.textContent = lines.join("\n"); diagnostics.hidden = lines.length === 0;
-        position();
-      };
-      update();
-      const timer = setInterval(update, 1000); popup.cleanup(() => clearInterval(timer));
-    }
-    if (!active && value.enabled && !("draftId" in owner) && this.control.status({task:owner}).connection) {
-      const pending = this.node("p", this.t("说明已提交，尚未启动 Chat。请查看 Codex 的工具授权或错误；接入失败时应暂停，不能当作协作完成。", "Instructions submitted. No Chat has started. Check Codex tool approvals or errors; stop if connection fails."));
-      pending.className = "bridge-quick-state"; pending.setAttribute("role", "status"); panel.append(pending);
-    }
     if (active && !("draftId" in owner)) {
-      const state = this.node("p", `${this.stateLabel(active.state)} · ${this.t("已发送请求", "Requests sent")}: ${active.usedRequests}`); state.className = "bridge-quick-state"; panel.append(state);
-      stateNode = state;
-      for (const code of [active.cleanupReason, active.titleError]) if (code) {
-        const detail=this.node("p",code); detail.className="bridge-quick-state"; detail.setAttribute("role","status"); panel.append(detail);
-      }
-      if (active.state === "repair-required") {
-        const repair = this.node("p", this.t("Chat 已回复，但格式需要一次修复。Codex 应续读同一请求，不是重新提交任务。", "Chat replied, but its format needs one repair. Codex should continue the same request, not resubmit the task."));
-        repair.className = "bridge-quick-state"; repair.setAttribute("role", "status"); panel.append(repair);
-      }
-      const details = this.node("details"), actions = endActions(active.sessionId, active.state === "cleanup-failed");
-      details.append(this.node("summary", this.t("管理当前协作", "Manage collaboration")), actions); panel.append(details);
-      details.addEventListener("toggle", position);
-      const add = (label: string, action: "remove-request-limit" | "continue-waiting", available: boolean): void => {
-        const button = this.button(label, () => { this.control.consent(owner, active.sessionId, action); close(); });
-        button.hidden = !available; consentButtons.set(action, button); actions.append(button);
-      };
-      add(this.t("取消本次请求上限", "Remove this session's request limit"), "remove-request-limit", active.maxRequests !== null && !active.busy && active.turnId === undefined);
-      add(this.t("继续等待", "Continue waiting"), "continue-waiting", active.state === "paused");
+      const lines = [this.t(`${active.state} · 已发送 ${active.usedRequests} 个请求`, `${active.state} · ${active.usedRequests} requests sent`)];
+      if (active.requestId) lines.push(active.requestId);
+      if (active.elapsedMs !== undefined) lines.push(`${Math.round(active.elapsedMs / 1000)} s`);
+      if (active.allowedMs !== undefined) lines.push(active.allowedMs === null ? this.t("无硬超时", "No hard timeout") : `${Math.round(active.allowedMs / 1000)} s`);
+      if (active.cleanupReason) lines.push(active.cleanupReason);
+      const state = this.node("p", lines.join(" · ")); state.className = "bridge-quick-state"; panel.append(state);
+      if (active.state === "paused") panel.append(this.button(this.t("继续等待", "Continue waiting"), () => {
+        if (!this.ownsMountedContext(owner)) { close(); return; }
+        this.control.continueAfterTimeout(owner, active.sessionId); close();
+      }));
+      if (active.maxRequests !== null && active.usedRequests >= active.maxRequests && !active.busy && !active.requestId) panel.append(this.button(this.t("取消请求上限", "Remove request limit"), () => {
+        if (!this.ownsMountedContext(owner)) { close(); return; }
+        this.control.removeRequestLimit(owner, active.sessionId); close();
+      }));
+      if (active.state === "failed" || active.state === "ending") panel.append(this.button(this.t("保留 Chat 并结束 Bridge", "Keep Chat and end Bridge"), async () => {
+        if (!this.ownsMountedContext(owner)) { close(); return; }
+        await this.control.finish({ task: owner, sessionId: active.sessionId, reason: "user-request", policy: "retain" });
+        close();
+      }));
     }
-    if (!("draftId" in owner)) for (const cleanup of this.control.status({task:owner}).pendingCleanup) {
-      const box = this.node("div"); box.className = "bridge-quick-state";
-      box.append(this.node("p", this.t("任务已完成，Chat 清理待处理", "Task completed; Chat cleanup pending") + ` · ${cleanup.reason ?? "CLEANUP_FAILED"}`));
-      box.append(endActions(cleanup.sessionId, true));
-      panel.append(box);
+    if (status?.error) {
+      const detail = this.node("p", this.errorText(status.error.code)); detail.className = "bridge-quick-state"; detail.setAttribute("role", "status"); panel.append(detail);
     }
-    const error = this.node("p", this.lastError ?? ""); error.dataset.bridgeError = "true"; error.className = "bridge-quick-state"; error.setAttribute("role", "status"); panel.append(error);
+    const error = this.node("p", this.lastError ? this.errorText(this.lastError) : ""); error.dataset.bridgeError = this.lastError ?? ""; error.className = "bridge-quick-state"; error.setAttribute("role", "status"); panel.append(error);
     position();
     enabled.focus({ preventScroll: true });
   }
@@ -441,6 +363,6 @@ export class BridgeUi {
     this.stopped = true; this.closeQuick?.(); this.handle?.unregister(); this.page?.unregister();
     this.stopContextPresentation?.(); this.stopContextPresentation = undefined;
     for (const timer of this.timers) clearInterval(timer); this.timers.clear();
-    this.prepared.clear(); this.blockedPreparation.clear(); this.accessoryUpdates.clear(); this.css.remove();
+    this.accessoryUpdates.clear(); this.css.remove();
   }
 }

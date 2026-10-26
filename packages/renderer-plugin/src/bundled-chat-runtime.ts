@@ -35,10 +35,10 @@ function bindings(source: string): Bindings | undefined {
     const httpName = body.match(/([\w$]+)\.safePost\(`\/conversation\/new_branch`/)?.[1];
     const catalogs = [...source.matchAll(/([\w$]+)=[\w$]+\([\w$]+,\(\)=>\(\{placeholderData:[\w$]+,queryFn:\(\)=>([\w$]+)\.safeGet\(`\/models`,[^;]{0,300}?queryKey:\[`chatgpt-models`\]/g)]
       .filter(entry => entry[2] === httpName).map(entry => entry[1]);
-    for (const query of source.matchAll(/([\w$]+)=[\w$]+\([\w$]+,\(\)=>([\w$]+)\(!1\)\)/g)) {
+    for (const query of source.matchAll(/([\w$]+)=[\w$]+\([\w$]+,\(\)=>([\w$]+)\((?:!1|`chat`)\)\)/g)) {
       const start = source.indexOf(`function ${query[2]}(`);
       if (start < 0) continue;
-      const body = source.slice(start).match(/^function [\w$]+\([\w$]+\)\{return\{placeholderData:[\w$]+,queryFn:\(\)=>([\w$]+)\.safeGet\(`\/models`,[^;]{0,500}?queryKey:[^;]{0,100}?\[`chatgpt-models`\]/);
+      const body = source.slice(start).match(/^function [\w$]+\([\w$]+\)\{return\{(?:placeholderData:[\w$]+,)?queryFn:\(\)=>([\w$]+)\.safeGet\(`\/models`,[^;]{0,500}?queryKey:[^;]{0,100}?\[`chatgpt-models`\]/);
       if (body?.[1] === httpName) catalogs.push(query[1]);
     }
     const transport = exported(match[1]), catalog = catalogs.length === 1 ? exported(catalogs[0]) : undefined;

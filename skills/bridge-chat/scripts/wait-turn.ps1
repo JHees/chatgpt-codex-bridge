@@ -7,8 +7,8 @@ function Invoke-BridgeTurn {
         $bridgeReads++
         $bridgeResult = ConvertFrom-Json -InputObject $bridgeOutput -AsHashtable -Depth 64
         if ($bridgeResult.ok -ne $true) { return $bridgeOutput }
-        $bridgeContinue = $bridgeResult.result.state -in @('waiting', 'repair-required')
-        # Yield a valid state to the executor periodically, not a business pause or resend.
+        $bridgeContinue = $bridgeResult.result.state -eq 'waiting'
+        # Yield after bounded reads; the session owns generation and deduplication.
         if ($bridgeContinue -and $bridgeReads -ge 3) { return $bridgeOutput }
         # No tight loop if an adapter returns its short window early. No payload changes.
         if ($bridgeContinue) { Start-Sleep -Milliseconds 250 }

@@ -25,13 +25,12 @@ export interface ConfigurationSnapshot {
   settings: Readonly<ChatSettings>;
   model: Readonly<ChatModel>;
 }
-export type PreparedConfiguration = Omit<ConfigurationSnapshot, "task">;
 export interface TaskPreferenceStore { get(key: string): unknown; set(key: string, value: unknown): unknown }
 const taskPrefix = "task-preferences-v2:";
 
 export type CleanupPolicy = "delete" | "archive" | "retain";
 export const isCleanupPolicy = (value: unknown): value is CleanupPolicy => value === "delete" || value === "archive" || value === "retain";
-const initial: ChatSettings = { enabled: false, modelKey: null, maxRequests: null, replyTimeoutMinutes: null, cleanup: "delete" };
+const initial: ChatSettings = { enabled: false, modelKey: null, maxRequests: null, replyTimeoutMinutes: null, cleanup: "retain" };
 
 function record(value: unknown, code = "INVALID_CONFIGURATION"): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new BridgeError(code, "Expected a configuration object.");
@@ -40,7 +39,7 @@ function record(value: unknown, code = "INVALID_CONFIGURATION"): Record<string, 
 function string(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= 256; }
 function taskKey(task: ComposerIdentity): string {
   if ("draftId" in task) {
-    if (Object.keys(task).length !== 1 || !string(task.draftId)) throw new BridgeError("TASK_MISMATCH", "A valid draft identity is required.");
+    if (!string(task.draftId)) throw new BridgeError("TASK_MISMATCH", "A valid draft identity is required.");
     return JSON.stringify(["draft", task.draftId]);
   }
   if (!string(task.hostId) || !string(task.taskId)) throw new BridgeError("TASK_MISMATCH", "A confirmed host and task identity is required.");
@@ -73,12 +72,11 @@ function savedSettings(value: unknown): ChatSettings {
 export class ChatConfiguration {
   private global: ChatSettings;
   private readonly tasks = new Map<string, ChatSettings>();
-  private readonly overrides = new Set<string>();
   private catalog: ChatModel[] = [];
 
-  constructor(savedDefaults: unknown = initial, private readonly store?: TaskPreferenceStore) { this.global = savedSettings(savedDefaults); }
+  constructor(savedDefaults: unknown = initial, private readonly store?: TaskPreferenceStore) { this.global = { ...savedSettings(savedDefaults), enabled: false }; }
   defaults(): ChatSettings { return { ...this.global }; }
-  saveDefaults(input: unknown): void { this.global = settings(input); }
+  saveDefaults(input: unknown): void { this.global = { ...settings(input), enabled: false }; }
   models(): ChatModel[] { return this.catalog.map(model => ({ ...model })); }
 
   updateCatalog(value: unknown): void {
@@ -92,6 +90,7 @@ export class ChatConfiguration {
       const keys = new Set<string>();
       for (const value of values) {
       const option = record(value, "APP_UNSUPPORTED");
+      if (option.isAvailable === false) continue;
       if (!string(option.slug) || !string(option.lane) || !string(option.modelTitle) || !string(option.selectedLabel)
         || !(option.thinkingEffort === undefined || option.thinkingEffort === null || string(option.thinkingEffort))) throw new BridgeError("APP_UNSUPPORTED", "A Chat model option is not supported.");
       const effort = typeof option.thinkingEffort === "string" ? option.thinkingEffort : null;
@@ -111,13 +110,10 @@ export class ChatConfiguration {
       const version = record(value, "APP_UNSUPPORTED");
       if (!string(version.id) || !string(version.label) || ids.has(version.id)) throw new BridgeError("APP_UNSUPPORTED", "The Chat version identity is ambiguous.");
       ids.add(version.id);
-      if (version.id === "latest") continue;
       const options = parse(version.options);
-      // Native named versions that contain current non-Pro presets supply their own Pro.
-      // Older unrelated families are not enabled merely because metadata mentions them.
-      if (!options.some(option => option.mode !== "pro" && latest.some(current => current.key === option.key))) continue;
+      // Preserve the native menu's version labels/order, including latest and older choices.
       for (const option of options) {
-        if (selected.has(option.key)) throw new BridgeError("APP_UNSUPPORTED", "A Chat preset belongs to multiple current families.");
+        if (selected.has(option.key)) continue;
         selected.set(option.key, { ...option, groupId: `version:${version.id}`, groupTitle: version.label });
       }
     }
@@ -130,18 +126,16 @@ export class ChatConfiguration {
     const key = taskKey(identity);
     let value = this.tasks.get(key);
     if (value === undefined) {
-      if ("draftId" in identity) value = { ...this.global };
+      if ("draftId" in identity) value = { ...this.global, enabled: false };
       else {
         const saved = this.store?.get(taskPrefix + key) ?? this.store?.get("task-preferences-v1:" + key);
         if (saved !== undefined && saved !== null) {
           const entry = record(saved);
           if ((entry.version !== 1 && entry.version !== 2) || !["observed", "chosen", "new"].includes(String(entry.origin))) throw new BridgeError("SAVED_TASK_INVALID", "The saved task preferences cannot be read.");
           value = savedSettings(entry.settings);
-          if (entry.origin !== "observed") this.overrides.add(key);
         } else {
           // An unrecorded existing task is not a newly-created task.
           value = { ...this.global, enabled: false };
-          this.store?.set(taskPrefix + key, { version: 2, origin: "observed", settings: value });
         }
       }
       this.tasks.set(key, value);
@@ -150,30 +144,20 @@ export class ChatConfiguration {
   }
   updateTask(identity: ComposerIdentity, patch: Partial<ChatSettings>): void {
     const value = settings({ ...this.task(identity), ...record(patch) });
-    this.persist(identity, value, "chosen");
-    this.overrides.add(taskKey(identity));
+    this.persist(identity, value);
   }
-  restoreDefaults(identity: ComposerIdentity): void { this.persist(identity, { ...this.global }, "chosen"); this.overrides.add(taskKey(identity)); }
-  promote(draft: { draftId: string }, task: TaskIdentity): void {
-    const key = taskKey(task);
-    this.task(task); // Load persisted explicit choices before considering a draft.
-    if (!this.overrides.has(key)) { this.persist(task, this.task(draft), "new"); this.overrides.add(key); }
-  }
+  restoreDefaults(identity: ComposerIdentity): void { this.persist(identity, { ...this.global }); }
   freeze(identity: TaskIdentity, id: string): Readonly<ConfigurationSnapshot> {
-    return Object.freeze({ ...this.prepare(identity, id), task: Object.freeze({ ...identity }) });
-  }
-  prepare(identity: ComposerIdentity, id: string): Readonly<PreparedConfiguration> {
-    if (!string(id)) throw new BridgeError("INVALID_CONFIGURATION", "A snapshot identity is required.");
+    if (!string(id)) throw new BridgeError("INVALID_CONFIGURATION", "A session identity is required.");
     const selected = this.task(identity);
     if (!selected.enabled) throw new BridgeError("COLLABORATION_DISABLED", "This task has not enabled Chat collaboration.");
     const model = this.catalog.find(model => model.key === selected.modelKey);
     if (model === undefined) throw new BridgeError("CHAT_CONFIGURATION_REQUIRED", "Select an available Chat model and supported parameters explicitly.");
-    return Object.freeze({ id, settings: Object.freeze(selected), model: Object.freeze({ ...model }) });
+    return Object.freeze({ id, task: Object.freeze({ ...identity }), settings: Object.freeze(selected), model: Object.freeze({ ...model }) });
   }
-  resetTasks(): void { this.tasks.clear(); this.overrides.clear(); }
-  private persist(identity: ComposerIdentity, value: ChatSettings, origin: "chosen" | "new"): void {
+  private persist(identity: ComposerIdentity, value: ChatSettings): void {
     const key = taskKey(identity);
-    if (!("draftId" in identity)) this.store?.set(taskPrefix + key, { version: 2, origin, settings: { ...value } });
+    if (!("draftId" in identity)) this.store?.set(taskPrefix + key, { version: 2, origin: "chosen", settings: { ...value } });
     this.tasks.set(key, value);
   }
 }

@@ -2,20 +2,36 @@
   "schemaVersion": 2,
   "id": "dev.codex-chat-bridge",
   "name": "Codex App Chat Bridge",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Structured, single-session collaboration through Chat inside the Codex desktop app.",
   "author": "ChatGPT Codex Bridge contributors",
   "scope": "renderer",
   "runAt": "document-end",
   "entry": "index.js",
   "documentation": "README.md",
-  "settings": { "mode": "page", "pageId": "main", "title": "Bridge" },
-  "permissions": ["dom", "local-storage", "settings", "composer", "agent-skills"],
+  "settings": {
+    "mode": "page",
+    "pageId": "main",
+    "title": "Bridge"
+  },
+  "permissions": [
+    "dom",
+    "local-storage",
+    "settings",
+    "composer",
+    "agent-skills"
+  ],
   "agentSkill": "bridge-chat",
   "update": {
     "provider": "github-releases",
     "repository": "JHees/chatgpt-codex-bridge",
     "asset": "bridge-{version}.zip"
   },
-  "hostCommands": { "operations": ["status", "exchange", "finish"] }
+  "hostCommands": {
+    "operations": [
+      "status",
+      "exchange",
+      "finish"
+    ]
+  }
 }

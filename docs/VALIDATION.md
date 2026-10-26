@@ -1,6 +1,6 @@
 # Bridge validation history
 
-Current unreleased UX work is tracked in [UX-CANDIDATE.md](UX-CANDIDATE.md). Entries below are historical results, not evidence that later candidates passed live acceptance.
+The entries below are historical checkpoints. They do not validate the current v2 task-opt-in and plain-text flow. Current architecture and acceptance status are in [ARCHITECTURE.md](ARCHITECTURE.md) and [USAGE.md](USAGE.md).
 
 ## Protocol compatibility and live Luna research loop — 2026-09-06
 

@@ -1,3 +1,5 @@
+> **Historical implementation gate:** this file records the pre-v2 acceptance scope. Current architecture and user flow are in [architecture](ARCHITECTURE.md) and [usage](USAGE.md). Historical test totals and Pro/model results do not establish current runtime acceptance.
+
 # 按任务后台协作：第一阶段入口验证
 
 最新检查日期：2026-09-06。Bridge 基线：0.1.0。Loader 基线：0.5.10。

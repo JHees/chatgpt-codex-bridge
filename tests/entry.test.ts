@@ -15,6 +15,7 @@ it("preserves skill diagnostics before background readiness with no Loader UI in
   vi.stubGlobal("document", window.document); vi.stubGlobal("location", window.location);
   try {
     start({ version: "test", storage: { get: () => undefined, set: () => {} } });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(await invokeHostCommand("status", {task:{hostId:"local",taskId:"task"}})).toMatchObject({
       compatibility: { settings: false, composer: false, background: false,
         bundledSkill: "loader-managed-unverified", bundledSkillNote: expect.stringContaining("not an installation failure") },

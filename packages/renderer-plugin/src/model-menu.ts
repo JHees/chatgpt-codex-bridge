@@ -1,4 +1,4 @@
-import { Check, ChevronRight, type IconNode } from "lucide";
+import { Check, ChevronRight, MessagesSquare, type IconNode } from "lucide";
 import type { ChatModel } from "./chat-configuration.js";
 
 export const modelGroup = (model: ChatModel): string => model.groupId ?? JSON.stringify([model.slug, model.mode]);
@@ -19,10 +19,11 @@ export function preferredModel(choices: readonly ChatModel[], preference?: ChatM
 }
 
 // Library-provided paths, rendered with the owning document for isolated UI tests.
-export function menuIcon(document: Document, kind: "check" | "next"): SVGElement {
+export function menuIcon(document: Document, kind: "check" | "next" | "bridge"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
-  const nodes: IconNode = kind === "check" ? Check : ChevronRight;
+  if (kind === "bridge") { svg.setAttribute("width", "20"); svg.setAttribute("height", "20"); }
+  const nodes: IconNode = kind === "check" ? Check : kind === "bridge" ? MessagesSquare : ChevronRight;
   for (const [tag, attributes] of nodes) { const child = document.createElementNS(svg.namespaceURI, tag); for (const [key, value] of Object.entries(attributes)) child.setAttribute(key, String(value)); svg.append(child); }
   return svg;
 }

@@ -80,7 +80,7 @@ jobs:
           [Console]::InputEncoding = [Text.UTF8Encoding]::new()
           $version = $env:RELEASE_TAG.Substring(1)
           $notesPath = "docs/RELEASE-$version.md"
-          if (-not (Test-Path -LiteralPath $notesPath)) { throw "Missing version-specific release notes: $notesPath" }
+          if (-not (Test-Path -LiteralPath $notesPath) -or [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notesPath -Raw))) { throw "Missing or empty version-specific release notes: $notesPath" }
           gh release create $env:RELEASE_TAG "dist/bridge-$version.zip" "dist/bridge-$version.zip.sha256" --verify-tag --draft --title "Bridge $version" --notes-file $notesPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false --latest

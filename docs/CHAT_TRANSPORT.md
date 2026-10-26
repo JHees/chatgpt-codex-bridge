@@ -1,21 +1,21 @@
-# App Chat transport
+# Native Chat transport
 
-Production uses the App-owned Chat client inside the exact app://-/index.html renderer, discovered from current local assets and native dependency scope. No separate login, webpage ChatGPT, SQLite access or foreground fallback participates.
+The Chat adapter connects to the App-owned Chat client in the exact `app://-/index.html` renderer. It discovers the current local assets and service scope, then verifies that the selected client is still the one mounted by the App. It does not open the Chat page, manipulate the composer, extract login credentials or use SQLite.
 
 ## Send and read
 
-The adapter assigns a native user message ID before sending once. Stream events establish conversation identity and observed reply IDs. Later messages reuse the owned conversation and final parent. Changed client identity or uncertain sending stops the session.
+The session coordinator gives each plain-text message a request ID and registers it before calling the adapter. The adapter sends through the current App client with the frozen model and available model parameters. A successful native completion returns its conversation and message IDs. Repeating a request ID with the same text reuses that message; using a different text is rejected.
 
-Each read window is bounded; the session separately owns the total deadline. Completion requires the final stream callback, native COMPLETE metadata and a unique assistant final message on the expected parent chain. All user messages must match the plugin's sent IDs and text. Late replies remain paused until explicit continuation.
+Reads poll the existing native generation and return `waiting` or its completed plain-text response. They never send. Completion is accepted only when native stream status, assistant message ID and the expected conversation parent chain agree. User intervention, a changed client or an uncertain send leaves the session unresolved and visible in status.
 
-## Readable conversation
+The command helper keeps each tool call bounded. It retries read windows with the same payload, not native sends. A caller continues with the same `instanceId`, `sessionId`, `requestId` and text. After plugin reload the new `instanceId` rejects the previous request, preventing accidental duplicate generations.
 
-Task briefs and evidence use natural-language sections; the collaboration role is introduced once. Replies start with one explicit status line, followed by a plan, question or completion rationale. Local calls remain structured for identity, budget and recovery. See the [protocol reference](../skills/bridge-chat/references/protocol.md).
+## Model choice and limitations
 
-## Naming and cleanup
+The adapter reads the native model catalog for the settings menu. Pro is available only when the user selects an available Pro option. If Codex changes its private renderer services, model discovery or send/read returns a clear error; Bridge stops and does not switch models. There is no stable public plugin API for these services.
 
-After final reply and ownership checks, native rename(id, title) adds [bridge] to the original title once. The adapter reads back the result and reports naming errors separately. A later change to a confirmed owned title is intervention. Missing titles are reported, not invented. Titles are not ownership proofs.
+Bridge never interprets Chat prose as a tool action. Codex inspects suggestions, applies normal permissions, performs the work and sends actual evidence back. The adapter passes plain text in both directions; the skill owns that review loop.
 
-Automatic finish requires a completed executor report plus Chat confirmation. Before delete, the adapter checks all user messages, the current parent and stream completion. An in-flight delete has one reusable promise; timeout never dispatches another delete. Rejected deletion stays retryable. Retain disposes in-memory ownership without deleting.
+## Cleanup
 
-The old semantic-DOM transport remains inactive historical source, not a runtime fallback. Current candidate limits and acceptance are tracked [separately](UX-CANDIDATE.md).
+The selected per-task policy defaults to `retain` for new tasks. Explicitly saved choices for existing tasks are kept. A user-requested stop retains the Chat by default. Delete or archive runs only for the session's confirmed native conversation after generation has finished; failure leaves the target available for the user to keep or resolve.

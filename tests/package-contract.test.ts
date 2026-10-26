@@ -49,7 +49,9 @@ describe("vNext package boundary", () => {
     expect(skill).toContain("name: bridge-chat");
     expect(skill).toContain("references/protocol.md");
     const protocol = await readFile(join(root, "skills", "bridge-chat", "references", "protocol.md"), "utf8");
-    expect(protocol).toContain("codex-chat-bridge/v1");
+    expect(protocol).toContain("requestId");
+    expect(protocol).toContain("sessionId");
+    expect(protocol).toContain("instanceId");
     await expect(readFile(join(root, "plugins", "chatgpt-codex-bridge", ".codex-plugin", "plugin.json"))).rejects.toThrow();
   });
 });

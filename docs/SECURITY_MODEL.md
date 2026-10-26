@@ -1,23 +1,25 @@
 # Bridge security model
 
-Bridge is trusted local renderer code coordinating one Codex task with one dedicated App Chat. It does not sandbox arbitrary same-user code or make Chat output trusted.
+Bridge is trusted renderer code running as the same Windows user as Codex. Its controls make task scope visible and prevent accidental cross-task use; they are not a sandbox against other code running as that user.
 
-## Fixed interface
+## Authorization
 
-Only manifest-declared status, exchange and finish are callable through Loader's current-user pipe. Loader owns the random loopback CDP endpoint and exact main renderer. Payloads cannot choose ports, targets, methods, selectors or JavaScript. Command size limits and outer timeouts remain Loader-owned.
+Only Loader's declared `status`, `exchange`, and `finish` commands are available to Codex. Each task starts with collaboration off. A user enables Bridge from that real task's composer and chooses its Chat model. Bridge applies the selected model and session settings to that task and keeps them fixed for the active session. A draft without a real task ID cannot start a session.
 
-Settings, scoped storage and composer capabilities use the generic plugin interface. Short instructions remain editable before native submission. There is no global submission replacement, hidden authority injection, foreground Chat input, executor-model change or permission grant.
+The task switch is the authority. Bridge does not treat an instruction string, model reply, task status call or request payload as permission to turn collaboration on. Chat text is untrusted advice. Codex applies its usual authorization checks before running tools. The plugin does not parse suggested actions into executable commands or certify that Codex's reported tests were actually run.
 
-## Identity and intent
+## Identity and request safety
 
-An accepted native submission binds configuration to host/task. One session and one unresolved turn are active. Sent turns cannot change content or resend; reads and clarification retain the original turn. Native IDs, parent ancestry, unique final reply and full user-message ownership checks establish Chat correlation. Navigation does not change ownership; instance replacement stops collaboration.
+The helper obtains Loader's user installation from the registered user folder. The command client uses Loader's current-user pipe; its allowlist fixes the plugin and operation. The renderer runs only in `app://-/index.html` and uses App-owned Chat services. Callers cannot choose JavaScript, ports, targets, selectors or native API methods.
 
-Natural-language replies require an explicit state header: completion is not inferred from prose. Legacy JSON validates IDs and fields. Plans are untrusted intent. Codex checks each step's scope, permission and actual result; code blocks are not an executable command channel.
+Every request carries the host/task identity and the current Bridge `instanceId`. A session freezes its task and model. Every message has a `requestId`; changing its text under the same ID is rejected. The coordinator records a request before native send, shares a concurrent read, and caches the reply. Repeating an identical request reads the existing native message. Reload changes the instance ID and rejects old requests, so they cannot accidentally create another generation.
 
-## Persistence and disposal
+Native Chat correlation uses the returned conversation ID, user message IDs, response events, parent chain and current native-client identity. If sending or ownership is uncertain, Bridge reports that state and retains the Chat. It never assumes a timeout means “not sent”, substitutes another model, or retries under a new ID.
 
-Only defaults and task preferences persist. Prompts, Chat IDs, sessions and execution history do not. Unknown existing tasks start disabled. Pro remains explicit; unavailable models are not replaced.
+## State and data
 
-Automatic deletion requires a completed executor report and planner confirmation, then adapter ownership/generation checks. This report is an attestation, not independent proof that tools ran. User intervention, unresolved generation or uncertain ownership prevents deletion. A [bridge] title alone never authorizes deletion. Failed cleanup of verified work preserves the exact target independently of the active slot; retain releases it. Its verified reply and the latest completion receipt support lost-output recovery without resending or repeating actions.
+Task preferences (enablement, model and user-selected limits/cleanup) use Loader-scoped storage. The active conversation, IDs, prompts and replies stay in memory. Reload or restart drops volatile state and does not restore, replay, enumerate or clean historical Chats.
 
-No restart recovery or historical cleanup runs. The plugin does not extract credentials, write databases, start a daemon/MCP/worker or create web ChatGPT targets. Disabling collaboration cannot retract data already sent.
+New tasks default to retaining the Chat. An explicit cleanup choice saved on an existing task remains in effect. `finish` after verified work follows that task's chosen policy; an explicit user stop defaults to retain. Delete or archive still requires a known owned conversation with no unresolved native generation. Ending the local waiter does not stop generation already accepted by Chat. If `finish` returns `nativeGenerationMayContinue: true`, local collaboration ended while native generation may still finish.
+
+No credentials are read or logged. Bridge does not write SQLite, start a daemon, add an MCP service, or connect to web ChatGPT. The helper and plugin never log prompts or replies.

@@ -1,3 +1,5 @@
+> **Historical feature backlog:** older sections describe pre-v2 ideas and checkpoints. The current supported user flow and runtime are defined in [architecture](ARCHITECTURE.md), [usage](USAGE.md), and [troubleshooting](TROUBLESHOOTING.md). Do not infer GPT Pro or live runtime acceptance from this backlog.
+
 # 后台协作与用户设置：新增需求边界
 
 > 当前状态更新：后台三操作、配置、设置／任务控件和随包脚本已接入开发候选入口，非 Pro Medium 后台两轮及删除已实测。完整模型组合与 UI 实机验收尚未完成。请以 [最新验收门槛](BACKGROUND_IMPLEMENTATION_GATE.md) 和 [使用说明](USAGE.md) 为准。下文保留早期需求与调研记录，不再作为当前实现状态；尤其“永久拒绝 Pro”和前台收发不是新方案。

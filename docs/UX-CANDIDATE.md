@@ -1,3 +1,5 @@
+> **Historical candidate:** this file documents the 0.1.2 receipt-gated design. The current task-opt-in and plain-text flow is described in [architecture](ARCHITECTURE.md), [usage](USAGE.md) and [troubleshooting](TROUBLESHOOTING.md). Earlier handshakes, test totals and acceptance claims do not apply to the current candidate.
+
 # 0.1.2 体验候选与验收边界
 
 本次按用户要求整理为 0.1.2，通过版本标签 CI 提供自动更新包；用户自行更新后进行实机验收。源码提交或 CI 打包通过不等于运行副本已更新。

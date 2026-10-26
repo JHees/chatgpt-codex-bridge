@@ -28,7 +28,16 @@ end {
     try { $bridgePayload = ConvertFrom-Json -InputObject $bridgeJson -AsHashtable -Depth 64 }
     catch { throw 'INVALID_REQUEST: Input is not valid JSON.' }
     if ($bridgePayload -isnot [Collections.IDictionary]) { throw 'INVALID_REQUEST: Input must be one JSON object.' }
-    if (-not $InstallRoot) { $InstallRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs/CodexScriptLoader' }
+    $bridgeRequiresApproval = $false
+    if (-not $InstallRoot) {
+        # The process-local known folder can point into an AppContainer instead of the user's installation.
+        try { $bridgeLocalData = Get-ItemPropertyValue -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name 'Local AppData' }
+        catch { throw 'LOADER_ACCESS_DENIED: No command was sent. Request tool approval for this same helper to resolve the user installation.' }
+        $bridgeLocalData = [Environment]::ExpandEnvironmentVariables([string]$bridgeLocalData)
+        if (-not [IO.Path]::IsPathFullyQualified($bridgeLocalData)) { throw 'LOADER_UNAVAILABLE: The user local application data directory is invalid. Supply the verified InstallRoot.' }
+        $bridgeRequiresApproval = -not [string]::Equals($bridgeLocalData.TrimEnd('\', '/'), [Environment]::GetFolderPath('LocalApplicationData').TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)
+        $InstallRoot = Join-Path $bridgeLocalData 'Programs/CodexScriptLoader'
+    }
     $bridgeRoot = [IO.Path]::GetFullPath($InstallRoot)
     $bridgePointer = Join-Path $bridgeRoot 'active.json'
     try { $bridgePointerText = Get-Content -LiteralPath $bridgePointer -Raw -Encoding utf8 }
@@ -42,6 +51,7 @@ end {
     if ($bridgeActive.version -cnotmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.-]+)?$' -or $bridgeActive.rid -cnotmatch '^win-(x64|arm64)$') { throw 'LOADER_UNAVAILABLE: The active pointer contains unsupported values.' }
     $bridgeClient = [IO.Path]::GetFullPath((Join-Path $bridgeRoot "versions/$($bridgeActive.version)/$($bridgeActive.rid)/CodexScriptLoader.Command.exe"))
     if (-not $bridgeClient.StartsWith($bridgeRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $bridgeClient -PathType Leaf)) { throw 'LOADER_UNAVAILABLE: The active command client is missing.' }
+    if ($bridgeRequiresApproval) { throw 'LOADER_ACCESS_DENIED: No command was sent. This Windows process uses redirected application data; request tool approval for this same helper to reach the user Loader.' }
     function Invoke-BridgeCommand {
     $bridgeStart = [Diagnostics.ProcessStartInfo]::new($bridgeClient)
     $bridgeStart.UseShellExecute = $false

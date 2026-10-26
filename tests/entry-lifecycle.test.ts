@@ -13,10 +13,11 @@ function fixture() {
   };
   return { window, api, unregistered: () => unregistered };
 }
-it("cleans its own style and settings when composer registration fails during startup", () => {
+it("cleans its own style and settings when composer registration fails during startup", async () => {
   const f = fixture();
   f.api.composer = { registerAccessory: () => { throw Error("COMPOSER_UNAVAILABLE"); } };
   expect(() => start(f.api)).not.toThrow();
+  await vi.waitFor(() => expect(f.unregistered()).toBe(1));
   expect(f.window.document.querySelectorAll("style")).toHaveLength(0);
   expect(f.unregistered()).toBe(1);
 });

@@ -1,27 +1,43 @@
 # Bridge architecture
 
-One Loader package contains the renderer and bundled skill/helper. Installation, updates and rollback manage them together.
+Bridge joins the current Codex task to one native Chat conversation. Loader supplies task-scoped preferences, a task-bound composer control, and three commands. Bridge owns the conversation state. The selected Chat model and any request limits are frozen when the session starts.
 
-## Runtime
+```mermaid
+flowchart LR
+    U[User selects Chat model and enables Bridge for this task] --> C[Codex task]
+    C -->|status, exchange, finish| S[Bridge session coordinator]
+    S <-->|model list, send, read, delete| A[Native Chat adapter]
+    L[Loader task identity and storage] --> S
+    A <--> N[Codex-owned Chat services]
+```
 
-Current Codex task → bundled helper → Loader command client → current-user pipe → Loader-owned CDP → Bridge controller → App-owned Chat client.
+## Responsibilities
 
-Public operations remain status, exchange and finish. Loader validates the renderer and fixed allowlist; callers cannot supply JavaScript, selectors, ports or CDP methods.
+- **Composer adapter:** displays the native Chat model catalog, per-task opt-in and active state. It writes a brief visible Bridge instruction into the task composer. The user's per-task opt-in authorizes Bridge; the instruction is context for Codex, not a hidden credential.
+- **Session coordinator:** owns the single active task, frozen model settings, request IDs, pending turn, response and cleanup outcome. It handles the three commands and rejects a second payload for an existing request ID.
+- **Native Chat adapter:** discovers the App's Chat services, starts one conversation, sends text, reads correlated replies and applies the selected cleanup policy. Internal App discovery stays in this adapter because Codex does not expose a stable plugin-level Chat API.
+- **Loader helper and skill:** invoke the fixed host commands from Codex's existing PowerShell 7 process. The skill guides Codex through evidence gathering, review, execution and feedback; Bridge transports text and never interprets Chat's prose as tool permission.
 
-- Configuration and UI: scoped storage holds defaults and host/task preferences. Drafts, frozen snapshots and active sessions stay in memory. The generic composer seam binds a short editable instruction to an accepted native submission.
-- Cooperation controller: owns task binding, one active business session and automatic finish after executor completion plus planner confirmation. Failed cleanup of verified tasks is tracked separately by original task/session; it does not occupy the active slot. Final receipts support recovery, not a historical journal.
-- Background session: owns immutable turns, action/result accounting, optional total request caps and hard deadlines, internal 90-second read windows, and one clarification. Default execution continues until completion. Actual user answers use accounted feedback; removing a cap or extending an explicit deadline remains UI-only.
-- App Chat adapter: discovers native assets and dependency scope; sends and reads via native message IDs, parent nodes and stream completion. It labels the owned Chat and verifies ownership before deletion.
-- Entry lifecycle: bounds service discovery/catalog loading, retries startup with backoff, and checks idle client identity. Partial UI registration is cleaned before retry. Recovery preserves the controller and bindings; an active session defers it. Stop cancels timers and invalidates in-flight attempts.
+## Request lifecycle
 
-## Communication and persistence
+```mermaid
+stateDiagram-v2
+    [*] --> Ready: task enabled and model selected
+    Ready --> Waiting: request recorded before native send
+    Waiting --> Waiting: same request ID, response pending
+    Waiting --> Reply: correlated native reply
+    Waiting --> Paused: explicit user-selected timeout
+    Paused --> Waiting: user continues the session
+    Reply --> Waiting: next request with a new request ID
+    Reply --> Ended: finish after local review
+    Waiting --> Failed: send or ownership result is uncertain
+    Failed --> Ended: retain or resolve the owned Chat
+```
 
-The composer carries a short skill reference, model and configuration ID. Detailed rules live in the skill. No verified native separate-context submission middleware exists in the current Loader; the candidate does not replace global submission functions or hide injected prompt text.
+Every exchange carries the current runtime `instanceId`, task, request ID and plain text. The first exchange creates a session and returns its ID; later exchanges supply both IDs. Repeating an identical request reads its saved state and cannot create another Chat message. Changing the text for an existing ID is rejected. A bounded read returns `waiting`; it does not cancel or replay native generation. After reload, a new instance ID prevents an old request from starting duplicate generation. An uncertain native send stays unresolved until the same conversation can be checked or the user ends local Bridge collaboration; native generation may still complete.
 
-Chat receives readable goal, progress, question and evidence sections. It replies in prose with a small explicit state header. The plugin maps a plan or question into local actions. Legacy JSON remains validated for compatibility. Chat intent is never tool authorization.
+Status reports protocol version 2 plus a per-runtime `instanceId`. An exchange must match that ID; a new instance rejects old requests, preventing accidental replay of a first request. New task cleanup defaults to retaining its Chat; explicitly saved policies on existing tasks are preserved. Only task preferences survive reload. Active sessions and replies remain in memory, so the plugin never reconstructs or replays work after restart. A new unsent draft cannot authorize a Bridge session; create the Codex task, then choose its model and enable Bridge.
 
-Only preferences persist. Accepted Bridge submissions transfer new draft preferences to the real task; unknown existing tasks start disabled. Drafts without submission receipts have no verified migration hook. See [candidate limits](UX-CANDIDATE.md).
+## Trade-offs
 
-Completion report plus Chat confirmation triggers configured cleanup. Generation, user intervention and uncertain ownership prevent automatic deletion. Cleanup failure preserves the target and reason; lost command output does not lose the latest automatic-completion reply. Reload never restores requests or scans historical Chats.
-
-No foreground Chat navigation, trusted Enter, database writes, webpage ChatGPT, daemon, MCP server, tunnel, worker or listening port participates. The retired DOM adapter and controller have been removed.
+Task opt-in is the authority. Bridge no longer depends on inspecting native composer text and inferring whether a particular hidden instruction was accepted. This removes the version-sensitive handshake; the visible task toggle still provides explicit user consent. The Chat adapter remains coupled to Codex's private renderer services. If those change, Bridge returns an adapter error and preserves any session whose send outcome is unknown.
