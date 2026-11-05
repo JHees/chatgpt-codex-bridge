@@ -6,8 +6,8 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import struct
+import subprocess
 import tempfile
-import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -16,15 +16,9 @@ LIMIT = 2 * 1024**3
 
 
 def download(destination):
-    with urllib.request.urlopen(SOURCE, timeout=60) as response, open(destination, "wb") as out:
-        if not response.geturl().startswith("https://persistent.oaistatic.com/"):
-            raise ValueError("Unexpected package download host")
-        size = 0
-        while chunk := response.read(1024**2):
-            size += len(chunk)
-            if size > LIMIT:
-                raise ValueError("Package exceeds download limit")
-            out.write(chunk)
+    subprocess.run(["curl.exe", "--fail", "--location", "--silent", "--show-error",
+                    "--proto", "=https", "--proto-redir", "=https", "--max-time", "600",
+                    "--max-filesize", str(LIMIT), "--output", str(destination), SOURCE], check=True, timeout=620)
 
 
 def asar_files(stream):
