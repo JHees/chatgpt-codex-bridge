@@ -1,0 +1,67 @@
+name: Desktop compatibility (static)
+
+on:
+  schedule:
+    - cron: '37 2,8,14,20 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tests/test_desktop_compatibility.py']
+  pull_request:
+    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tests/test_desktop_compatibility.py']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  inspect-latest:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Existing checks, tests, build and package verification
+        id: checks
+        run: npm run check
+      - name: Test the offline checker
+        id: checker-tests
+        if: ${{ !cancelled() }}
+        run: |
+          python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_desktop_*.py'
+      - name: Inspect the latest official desktop package
+        if: ${{ !cancelled() }}
+        run: python tools/check_desktop_compatibility.py --output compatibility-report.json
+      - name: Record incomplete inspection
+        if: ${{ always() }}
+        run: |
+          'Repository checks: ${{ steps.checks.outcome }}; offline checker tests: ${{ steps.checker-tests.outcome }}.' >> $env:GITHUB_STEP_SUMMARY
+          if (-not (Test-Path -LiteralPath compatibility-report.json)) {
+            '## Bridge desktop compatibility: check-error' >> $env:GITHUB_STEP_SUMMARY
+            'No package inspection report was produced. Compatibility is unknown; inspect the failed step.' >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() }}
+        with:
+          name: bridge-desktop-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: compatibility-report.json
+          if-no-files-found: warn
+          retention-days: 14
