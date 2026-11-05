@@ -61,7 +61,7 @@ def inspect_asar(stream, supported_formats):
         nonlocal total
         offset, size = files[path]
         total += size
-        if size > 64 * 1024**2 or total > 256 * 1024**2:
+        if size > 64 * 1024**2 or total > LIMIT:
             raise ValueError("Renderer scan exceeds size limit")
         stream.seek(offset)
         return stream.read(size).decode("utf-8")
@@ -78,23 +78,26 @@ def inspect_asar(stream, supported_formats):
     entry, scripts = entries[0]
     root = str(PurePosixPath(entry).parent)
     root = "" if root == "." else root + "/"
-    assets = {path: read(path) for path in files if path.startswith(root + "assets/") and path.endswith(".js")}
+    assets = [path for path in files if path.startswith(root + "assets/") and path.endswith(".js")]
     entry_paths = [root + src.removeprefix("/").removeprefix("./") for src in scripts]
-    entry_sources = [assets[path] for path in entry_paths if path in assets]
+    entry_sources = [read(path) for path in entry_paths if path in assets]
     rspack = any(re.search(r'export\s*\{[^{}]*\bas __webpack_require__\s*\}', source) for source in entry_sources)
     standalone = any(re.fullmatch(r"chatgpt-conversation-client-[\w-]+\.js", PurePosixPath(path).name) for path in assets)
     bundled = any(re.fullmatch(r"app-initial-[\w-]+\.js", PurePosixPath(path).name) for path in assets)
-    sources = list(assets.values())
+    transport = catalog = branch = False
+    for path in assets:
+        source = read(path)
+        transport |= all(marker in source for marker in ("prepareCompletionStream(", "createCompletionStreamHandlers(", "startCompletionStream("))
+        catalog |= "chatgpt-models" in source and "/models" in source
+        branch |= "/conversation/new_branch" in source
     # shortcut: lexical evidence only; use a signed-in desktop runner for service binding and send/receive coverage.
     return {
         "uniqueRendererEntry": True,
         "entryAssetsPresent": len(entry_sources) == len(scripts),
         "supportedBundleFormat": (rspack and "rspack" in supported_formats) or (standalone and "standalone" in supported_formats) or (bundled and "bundled" in supported_formats),
-        "completionTransportShape": any(all(marker in source for marker in (
-            "prepareCompletionStream(", "createCompletionStreamHandlers(", "startCompletionStream(",
-        )) for source in sources),
-        "normalizedModelCatalogShape": any("chatgpt-models" in source and "/models" in source for source in sources),
-        "conversationBranchEndpoint": any("/conversation/new_branch" in source for source in sources),
+        "completionTransportShape": transport,
+        "normalizedModelCatalogShape": catalog,
+        "conversationBranchEndpoint": branch,
     }
 
 

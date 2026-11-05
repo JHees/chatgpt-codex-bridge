@@ -1,5 +1,6 @@
 import { BridgeError } from "./errors.js";
 import { discoverBundledChatRuntime } from "./bundled-chat-runtime.js";
+import { discoverRspackChatRuntime } from "./rspack-chat-runtime.js";
 
 export interface AppChatClient {
   models(): Promise<unknown>;
@@ -28,7 +29,7 @@ export interface Scope {
 
 const MAX_SOURCE_BYTES = 24 * 1024 * 1024;
 const MAX_SOURCES = 8;
-const assetPattern = /^app:\/\/-\/assets\/[A-Za-z0-9_-]+\.js$/;
+const assetPattern = /^app:\/\/-\/assets\/(?:[A-Za-z0-9_-]+|\d+\.[a-f0-9]+)\.js$/;
 const clientPattern = /^chatgpt-conversation-client-[A-Za-z0-9_-]+\.js$/;
 const initialPattern = /^app-initial-[A-Za-z0-9_-]+\.js$/;
 
@@ -84,6 +85,7 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
   const visited = new Set<string>();
   const clients = new Set<string>();
   const bundledSources = new Map<string, string>();
+  const rspackEntries: string[] = [];
   let bytes = 0;
   while (queue.length > 0) {
     const url = queue.shift()!;
@@ -98,6 +100,7 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
     bytes += new TextEncoder().encode(source).length;
     if (bytes > MAX_SOURCE_BYTES) throw new BridgeError("APP_UNSUPPORTED", "App resources exceeded the discovery size limit.");
     if (initialPattern.test(basename)) bundledSources.set(url, source);
+    if (/\bexport\s*\{[^{}]*\bas __webpack_require__\s*\}/.test(source)) rspackEntries.push(url);
     // Follow only local, literal references in the observed entry graph; never evaluate source text.
     for (const match of source.matchAll(/["'`]\.\/([A-Za-z0-9_-]+\.js)["'`]/g)) {
       const name = match[1]!;
@@ -105,6 +108,8 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
       else if (initialPattern.test(name)) queue.push(`app://-/assets/${name}`);
     }
   }
+  if (rspackEntries.length) return discoverRspackChatRuntime(environment, rspackEntries,
+    () => scopesFrom(environment.currentRoot ? environment.currentRoot() : environment.root));
   if (clients.size === 0) return discoverBundledChatRuntime(environment, bundledSources,
     () => scopesFrom(environment.currentRoot ? environment.currentRoot() : environment.root));
   if (clients.size !== 1) throw new BridgeError("APP_UNSUPPORTED", "Exactly one referenced App Chat client module is required.");

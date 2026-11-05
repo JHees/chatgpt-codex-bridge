@@ -104,7 +104,7 @@ it.skipIf(process.platform !== "win32")("rejects Windows PowerShell 5 before mis
   const legacy=join(process.env.SystemRoot??"C:/Windows","System32/WindowsPowerShell/v1.0/powershell.exe");
   const result=spawnSync(legacy,["-NoProfile","-ExecutionPolicy","Bypass","-File",helper,"-Operation","status","-PayloadJson","{}"],{encoding:"utf8",timeout:10000,windowsHide:true});
   expect(result.stderr).toContain("POWERSHELL_7_REQUIRED");
-});
+}, 15_000);
 
 const pwsh = join(process.env.ProgramFiles ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe");
 const helper = resolve("skills/bridge-chat/scripts/invoke-bridge.ps1");

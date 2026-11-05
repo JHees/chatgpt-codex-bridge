@@ -66,6 +66,10 @@ export async function discoverBundledChatRuntime(environment: AppChatEnvironment
     try { httpModule = object(await environment.importModule(new URL(selected.httpModule, selected.url).href)); } catch { unsupported(); }
   }
   const rawHttp = object(httpModule?.[selected.http]);
+  return bindNativeChatRuntime(descriptor, catalogDescriptor, rawHttp, scopes);
+}
+
+export function bindNativeChatRuntime(descriptor: unknown, catalogDescriptor: unknown, rawHttp: Record<string, unknown> | undefined, scopes: () => Set<Scope>): { client: AppChatClient; isCurrent(): boolean } {
   if (descriptor === undefined || catalogDescriptor === undefined || !rawHttp || !["safeGet", "safePost", "safePatch", "safeDelete"].every(key => typeof rawHttp[key] === "function")) unsupported();
   const http = rawHttp as unknown as NativeHttp;
   const resolve = (): Map<StreamClient, Catalog> => {
