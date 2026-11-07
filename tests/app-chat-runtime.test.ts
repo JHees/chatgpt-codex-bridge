@@ -1,3 +1,4 @@
+import { isCodexChatRenderer } from "../packages/renderer-plugin/src/renderer-url.js";
 import { expect, it } from "vitest";
 import { discoverAppChatRuntime, type AppChatEnvironment } from "../packages/renderer-plugin/src/app-chat-runtime.js";
 
@@ -103,4 +104,11 @@ it("discovers outer App scopes without traversing the task UI below a scope", as
   for (let i = 0; i < 6000; i++) child = { child };
   env.root = { memoizedProps: { scope: { query: {}, get: () => client() } }, child };
   await expect(discoverAppChatRuntime(env)).resolves.toHaveProperty("client");
+});
+
+
+it("allows only primary and detached local chat renderers", () => {
+  expect(isCodexChatRenderer("app://-/detached-window.html?initialRoute=%2Fdetached-window%3Fthread%3Dexample")).toBe(true);
+  expect(isCodexChatRenderer("app://-/index.html?initialRoute=%2Favatar-overlay")).toBe(false);
+  expect(isCodexChatRenderer("https://chatgpt.com/")).toBe(false);
 });

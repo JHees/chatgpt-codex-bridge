@@ -1,6 +1,6 @@
 # Native Chat transport
 
-The Chat adapter connects to the App-owned Chat client in the exact `app://-/index.html` renderer. It discovers the current local assets and service scope, then verifies that the selected client is still the one mounted by the App. It does not open the Chat page, manipulate the composer, extract login credentials or use SQLite.
+The Chat adapter connects to the App-owned Chat client in a validated local main or detached chat renderer under `app://-/`. Avatar overlays and external pages are excluded. It discovers the current local assets and service scope, then verifies that the selected client is still the one mounted by the App. It does not open the Chat page, manipulate the composer, extract login credentials or use SQLite.
 
 ## Send and read
 

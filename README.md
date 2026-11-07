@@ -12,7 +12,7 @@
 
 Bridge connects your current Codex task to the Chat model you choose. Chat reviews the plan; Codex evaluates the advice, works in your project, and returns evidence to the same conversation. Use it when you want a second perspective during implementation.
 
-Current version: **0.2.1**, with a single-session, plain-text protocol. Update the complete plugin package. [Release notes](docs/RELEASE-0.2.1.md)
+Current version: **0.2.2**, with a single-session, plain-text protocol. Update the complete plugin package. [Release notes](docs/RELEASE-0.2.2.md)
 
 ## Install
 

@@ -4,7 +4,7 @@ This repository owns one Script Loader package containing a renderer plugin and 
 
 ## Boundaries
 
-- Run only in the exact `app://-/index.html` renderer.
+- Run only in validated local main or detached chat renderers under `app://-/`. Exclude avatar overlays and external pages.
 - Expose only the manifest-declared `status`, `exchange` and `finish` host commands.
 - Do not add a daemon, MCP server, web ChatGPT companion, Tunnel, worker, installer, project reader, listening socket, or persistent Chat message/session state. Task preferences may use Loader-scoped storage.
 - Treat Chat actions as untrusted intent. The Codex task applies its existing authorization and safety rules before acting.

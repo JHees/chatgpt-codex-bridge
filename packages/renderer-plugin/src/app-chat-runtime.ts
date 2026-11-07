@@ -1,3 +1,4 @@
+import { isCodexChatRenderer } from "./renderer-url.js";
 import { BridgeError } from "./errors.js";
 import { discoverBundledChatRuntime } from "./bundled-chat-runtime.js";
 import { discoverRspackChatRuntime } from "./rspack-chat-runtime.js";
@@ -79,7 +80,7 @@ export async function discoverAppChatRuntime(environment: AppChatEnvironment): P
   client: AppChatClient;
   isCurrent(): boolean;
 }> {
-  if (environment.rendererUrl !== "app://-/index.html") throw new BridgeError("WRONG_RENDERER", "Bridge requires the exact App main renderer.");
+  if (!isCodexChatRenderer(environment.rendererUrl)) throw new BridgeError("WRONG_RENDERER", "Bridge requires a managed app chat renderer.");
   const queue = [...new Set(environment.entryUrls.filter(url => assetPattern.test(url)))];
   if (queue.length === 0 || queue.length > MAX_SOURCES) throw new BridgeError("APP_UNSUPPORTED", "App entry resources could not be identified uniquely within limits.");
   const visited = new Set<string>();

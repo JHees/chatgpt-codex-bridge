@@ -266,13 +266,13 @@ export class BridgeUi {
       for (const cleanup of cleanups.splice(0)) cleanup();
       panel.remove(); anchor.setAttribute("aria-expanded", "false");
       this.document.removeEventListener("pointerdown", outside, true);
-      this.document.removeEventListener("keydown", keydown);
+      view.removeEventListener("keydown", keydown, true);
       this.document.removeEventListener("focusin", focusout);
       view.removeEventListener("resize", position); view.removeEventListener("scroll", position, true);
       if (this.closeQuick === close) this.closeQuick = undefined;
     };
     const outside = (event: Event): void => { if (!event.composedPath().includes(panel) && !event.composedPath().includes(anchor)) close(); };
-    const keydown = (event: KeyboardEvent): void => { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); close(); anchor.focus(); } };
+    const keydown = (event: KeyboardEvent): void => { if (event.key === "Escape") { event.preventDefault(); close(); anchor.focus(); } };
     const focusout = (event: Event): void => { if (!event.composedPath().includes(panel) && event.target !== anchor) close(); };
     const position = (): void => {
       if (!anchor.isConnected || !available()) { close(); return; }
@@ -283,7 +283,7 @@ export class BridgeUi {
     };
     this.closeQuick = close;
     this.document.body.append(panel);
-    this.document.addEventListener("pointerdown", outside, true); this.document.addEventListener("keydown", keydown); this.document.addEventListener("focusin", focusout);
+    this.document.addEventListener("pointerdown", outside, true); view.addEventListener("keydown", keydown, true); this.document.addEventListener("focusin", focusout);
     view.addEventListener("resize", position); view.addEventListener("scroll", position, true);
     return { panel, close, position, cleanup: (run: () => void) => cleanups.push(run) };
   }

@@ -87,3 +87,15 @@ it("shows a short next step and the original error code",()=>{
   expect(f.document.querySelector("[data-bridge-background]")?.textContent).toContain("same requestId");
   expect(f.document.querySelector("[data-bridge-background]")?.textContent).toContain("Reconnecting automatically");
 });
+it("Escape closes the popup despite native prevention and document capture handlers", async () => {
+  const f = fixture(); await Promise.resolve();
+  f.window.addEventListener("keydown", event => event.preventDefault(), true);
+  const trigger = f.composer.querySelector<HTMLButtonElement>(".bridge-compact")!;
+  trigger.click(); await Promise.resolve();
+  const panel = f.document.querySelector<HTMLElement>(".bridge-popover")!;
+  const consume = (event: Event): void => { event.preventDefault(); event.stopImmediatePropagation(); };
+  f.document.addEventListener("keydown", consume, true);
+  panel.dispatchEvent(new f.window.KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}) as unknown as Event);
+  expect(f.document.querySelector(".bridge-popover")).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});

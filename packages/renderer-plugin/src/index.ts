@@ -1,3 +1,4 @@
+import { isCodexChatRenderer } from "./renderer-url.js";
 import { appChatEnvironment, discoverAppChatRuntime } from "./app-chat-runtime.js";
 import { AppChatBackgroundAdapter } from "./background-adapter.js";
 import { ChatConfiguration } from "./chat-configuration.js";
@@ -18,7 +19,7 @@ let connectionError: string | null = null;
 let connectionStage: "discover" | "models" | "ready" = "discover";
 
 export function start(api: LoaderApi): void {
-  if (globalThis.location?.href !== "app://-/index.html") throw new BridgeError("WRONG_RENDERER", "Bridge only runs in the Codex main renderer.");
+  if (!isCodexChatRenderer(globalThis.location?.href)) throw new BridgeError("WRONG_RENDERER", "Bridge only runs in a managed Codex chat renderer.");
   stop();
   const instance = epoch;
   let configuration: ChatConfiguration;
