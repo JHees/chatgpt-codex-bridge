@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { discoverAppChatRuntime } from "../packages/renderer-plugin/src/app-chat-runtime.js";
+import { rspackCatalogExport } from "../packages/renderer-plugin/src/rspack-chat-runtime.js";
+import { inspectCatalogBindings } from "../tools/check-rspack-catalog.js";
 
 function fixture() {
   const transport = {}, catalog = {}, gizmo = {};
@@ -57,4 +59,29 @@ it("rejects missing cached services without executing module factories", async (
   delete f.require.c.http;
   await expect(discoverAppChatRuntime(f.environment)).rejects.toMatchObject({ code: "APP_UNSUPPORTED" });
   expect(f.require).not.toHaveBeenCalled();
+});
+
+it("discovers a scope-aware chat model catalog without selecting gizmo or merged catalogs", async () => {
+  const f = fixture();
+  const source = String(f.require.m.models).replace('()=>c("chat")', '({scope:s})=>c(s,"chat")');
+  f.require.m.models.toString = () => source;
+  const runtime = await discoverAppChatRuntime(f.environment);
+  expect(await runtime.client.models()).toEqual({ options: [{ slug: "test" }] });
+  expect(f.fetch).toHaveBeenCalledOnce();
+  expect(f.require).not.toHaveBeenCalled();
+  expect(f.stream.startCompletionStream).not.toHaveBeenCalled();
+});
+
+it("the offline check uses the runtime matcher and rejects changed or ambiguous bindings", () => {
+  const source = String(fixture().require.m.models);
+  const scoped = source.replace('()=>c("chat")', '({scope:s})=>c(s,"chat")');
+  for (const text of [source, scoped]) {
+    expect(inspectCatalogBindings([`throw Error("must not execute");export const __webpack_modules__={${text}};`])).toBe(true);
+    expect(rspackCatalogExport(text)).toBe("a");
+  }
+  const unsupported = scoped.replace('c(s,"chat")', 'c(other,"chat")');
+  expect(inspectCatalogBindings([`export const __webpack_modules__={${unsupported}};`])).toBe(false);
+  expect(rspackCatalogExport(unsupported)).toBeUndefined();
+  expect(rspackCatalogExport(source + source)).toBeUndefined();
+  expect(inspectCatalogBindings([`const modules={${source}};`, `const other={${scoped}};`])).toBe(false);
 });

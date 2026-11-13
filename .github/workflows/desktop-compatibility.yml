@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tests/test_desktop_compatibility.py']
+    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tools/check-rspack-catalog.ts', 'packages/renderer-plugin/src/rspack-chat-runtime.ts', 'tests/rspack-chat-runtime.test.ts', 'tests/test_desktop_compatibility.py']
   pull_request:
-    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tests/test_desktop_compatibility.py']
+    paths: ['.github/workflows/desktop-compatibility.yml', 'tools/check_desktop_compatibility.py', 'tools/check-rspack-catalog.ts', 'packages/renderer-plugin/src/rspack-chat-runtime.ts', 'tests/rspack-chat-runtime.test.ts', 'tests/test_desktop_compatibility.py']
 
 permissions:
   contents: read

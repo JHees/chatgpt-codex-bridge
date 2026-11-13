@@ -85,13 +85,16 @@ def inspect_asar(stream, supported_formats):
     standalone = any(re.fullmatch(r"chatgpt-conversation-client-[\w-]+\.js", PurePosixPath(path).name) for path in assets)
     bundled = any(re.fullmatch(r"app-initial-[\w-]+\.js", PurePosixPath(path).name) for path in assets)
     transport = catalog = branch = False
+    catalog_sources = []
     for path in assets:
         source = read(path)
         transport |= all(marker in source for marker in ("prepareCompletionStream(", "createCompletionStreamHandlers(", "startCompletionStream("))
         catalog |= "chatgpt-models" in source and "/models" in source
+        if rspack and '"chatgpt-models"' in source and '.safeGet("/models"' in source:
+            catalog_sources.append(source)
         branch |= "/conversation/new_branch" in source
     # shortcut: lexical evidence only; use a signed-in desktop runner for service binding and send/receive coverage.
-    return {
+    checks = {
         "uniqueRendererEntry": True,
         "entryAssetsPresent": len(entry_sources) == len(scripts),
         "supportedBundleFormat": (rspack and "rspack" in supported_formats) or (standalone and "standalone" in supported_formats) or (bundled and "bundled" in supported_formats),
@@ -99,6 +102,13 @@ def inspect_asar(stream, supported_formats):
         "normalizedModelCatalogShape": catalog,
         "conversationBranchEndpoint": branch,
     }
+    if rspack:
+        tool = Path(__file__).with_name("check-rspack-catalog.ts")
+        result = subprocess.run(["node", "--import", "tsx", str(tool.resolve())],
+                                input=json.dumps(catalog_sources), text=True, encoding="utf-8",
+                                capture_output=True, timeout=60, check=True)
+        checks["modelCatalogBinding"] = json.loads(result.stdout)["supported"]
+    return checks
 
 
 def inspect_package(path):

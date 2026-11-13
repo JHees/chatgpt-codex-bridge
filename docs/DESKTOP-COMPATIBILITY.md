@@ -16,8 +16,11 @@ and reads the downloaded MSIX/ASAR as data. It does not install the app, execute
 its JavaScript, sign in, send a Chat request or modify an installed plugin.
 The checker looks for the renderer entry and assets, a bundle format supported
 by the checked-out Bridge discovery code, completion-transport methods, model
-catalog markers and conversation endpoints. These are lexical signals: matching
-them does not prove the actual binding expressions still resolve.
+catalog markers and conversation endpoints. For Rspack model catalogs, it also
+parses the module source as data and uses Bridge's production binding matcher.
+Unsupported or ambiguous catalog declarations fail this check even when the
+keywords remain present. Other checks are lexical signals; none prove that
+signed-in service instances resolve at runtime.
 
 The Actions summary and the JSON artifact record the checked commit, desktop
 version, architecture, package SHA-256 and individual results:
@@ -41,7 +44,8 @@ python -m unittest discover -s tests -p "test_desktop_*.py"
 python tools/check_desktop_compatibility.py --package downloaded.msix --output report.json
 ```
 
-Without `--package`, the checker downloads the official latest package. Exit
+Install the repository's locked npm dependencies first; the catalog check uses
+the existing Node.js, TypeScript and tsx tools. Without `--package`, the checker downloads the official latest package. Exit
 code 0 means `passed-static`; any other status exits 1. Signed-in model access,
 live DOM mounting, service identity, sending, streaming and cleanup need a
 separate real-desktop acceptance test. Server-side feature flags may change
@@ -53,7 +57,8 @@ without a new MSIX and are outside this watch's coverage.
 桌面安装包，也可在 Actions 页面手动运行。必须合入默认分支才会定时执行；
 GitHub 调度可能延迟。每轮都检查最新包，不依赖上次版本缓存。
 
-检查范围是 Bridge 所依赖的入口、打包格式、模型目录和会话接口的源码特征，
+检查范围是 Bridge 所依赖的入口、打包格式、模型目录和会话接口的源码特征；
+Rspack 模型目录还会复用插件实际的绑定匹配逻辑，拒绝无法识别或不唯一的声明。
 同时运行现有测试与构建。报告区分“静态通过”“疑似不兼容”“检查出错”，
 后两种情况会让工作流失败。报告保留 14 天，不上传安装包、应用源码或账号信息。
 

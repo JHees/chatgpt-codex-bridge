@@ -4,6 +4,14 @@ import { BridgeError } from "./errors.js";
 
 function unsupported(): never { throw new BridgeError("APP_UNSUPPORTED", "The cached App Chat services could not be identified uniquely."); }
 
+export function rspackCatalogExport(source: string): string | undefined {
+  const declarations = [...source.matchAll(/([\w$]+)=\(0,[\w$.]+\)\([\w$.]+,(?:\(\)=>[\w$]+\("chat"\)|\(\{scope:([\w$]+)\}\)=>[\w$]+\(\2,"chat"\))\)/g)];
+  if (declarations.length !== 1) return;
+  const aliases = [...source.matchAll(/([\w$]+):(?:\(\)=>)?([\w$]+)(?=[,}])/g)]
+    .filter(match => match[2] === declarations[0]![1]);
+  return aliases.length === 1 ? aliases[0]![1] : undefined;
+}
+
 /** Read the exported runtime's cache; never execute factories or create a second service. */
 export async function discoverRspackChatRuntime(environment: AppChatEnvironment, entries: string[], scopes: () => Set<Scope>) {
   if (entries.length !== 1) unsupported();
@@ -35,10 +43,9 @@ export async function discoverRspackChatRuntime(environment: AppChatEnvironment,
       transports.push(exports[alias[0]![1]!]);
     }
     if (catalog) {
-      const local = source.match(/([\w$]+)=\(0,[\w$.]+\)\([\w$.]+,\(\)=>[\w$]+\("chat"\)\)/)?.[1];
-      const alias = [...source.matchAll(/([\w$]+):(?:\(\)=>)?([\w$]+)(?=[,}])/g)].filter(match => match[2] === local);
-      if (alias.length !== 1) unsupported();
-      catalogs.push(exports[alias[0]![1]!]);
+      const alias = rspackCatalogExport(source);
+      if (!alias) unsupported();
+      catalogs.push(exports[alias]);
     }
   }
   if (transports.length !== 1 || catalogs.length !== 1 || new Set(clients).size !== 1) unsupported();

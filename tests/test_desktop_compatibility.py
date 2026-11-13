@@ -32,7 +32,7 @@ def renderer():
     return {
         "webview/index.html": '<div id="root"></div><script type="module" src="./assets/123.abc.js"></script>',
         "webview/assets/123.abc.js": 'export{r as __webpack_require__};',
-        "webview/assets/456.def.js": 'prepareCompletionStream(){}createCompletionStreamHandlers(){}startCompletionStream(){};"chatgpt-models";"/models";"/conversation/new_branch";"/conversation/{conversation_id}";"/conversation/id/{conversation_id}";',
+        "webview/assets/456.def.js": 'export const __webpack_modules__={models(e,t,n){let c=(0,r.RD)(a.u,()=>f("chat"));function f(){return{queryFn:()=>h.Request.safeGet("/models",{}),queryKey:["chatgpt-models"]}}n.d(t,{},{a:c})},transport(e,t,n){class S{prepareCompletionStream(){}createCompletionStreamHandlers(){}startCompletionStream(){}branch(){return h.Request.safePost("/conversation/new_branch",{})}}}};',
     }
 
 
@@ -52,6 +52,13 @@ class DesktopCompatibilityTests(unittest.TestCase):
         self.assertFalse(inspect_asar(io.BytesIO(archive(files)), {"rspack"})["completionTransportShape"])
         del files["webview/assets/123.abc.js"]
         self.assertFalse(inspect_asar(io.BytesIO(archive(files)), {"rspack"})["entryAssetsPresent"])
+
+    def test_catalog_markers_do_not_hide_an_unsupported_binding(self):
+        files = renderer()
+        files["webview/assets/456.def.js"] = files["webview/assets/456.def.js"].replace('()=>f("chat")', '({scope:s})=>f(other,"chat")')
+        result = inspect_asar(io.BytesIO(archive(files)), {"rspack"})
+        self.assertTrue(result["normalizedModelCatalogShape"])
+        self.assertFalse(result["modelCatalogBinding"])
 
     def test_ambiguous_renderer_and_broken_archive(self):
         files = renderer()
