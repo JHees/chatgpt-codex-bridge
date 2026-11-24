@@ -94,7 +94,7 @@ it("rejects excessive resource data and excessive initial candidates", async () 
   const env = environment();
   env.readSource = async () => "x".repeat(24 * 1024 * 1024 + 1);
   await expect(discoverAppChatRuntime(env)).rejects.toMatchObject({ code: "APP_UNSUPPORTED" });
-  env.entryUrls = Array.from({ length: 9 }, (_, i) => `app://-/assets/index-${i}.js`);
+  env.entryUrls = Array.from({ length: 13 }, (_, i) => `app://-/assets/index-${i}.js`);
   await expect(discoverAppChatRuntime(env)).rejects.toMatchObject({ code: "APP_UNSUPPORTED" });
 });
 

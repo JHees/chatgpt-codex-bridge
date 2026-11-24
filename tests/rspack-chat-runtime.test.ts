@@ -54,6 +54,15 @@ it("rejects ambiguous runtimes and catalogs without requesting models", async ()
   expect(f.require).not.toHaveBeenCalled();
 });
 
+it("accepts a mounted detached chat with nine entry scripts and one runtime", async () => {
+  const f = fixture();
+  const entries = Array.from({ length: 9 }, (_, i) => `app://-/assets/chunk-${i}.js`);
+  const runtime = await discoverAppChatRuntime({ ...f.environment, rendererUrl: "app://-/detached-window.html",
+    entryUrls: entries, readSource: async url => url === entries[8] ? 'export{r as __webpack_require__};' : 'export{}' });
+  expect(runtime.isCurrent()).toBe(true);
+  expect(f.environment.importModule).toHaveBeenCalledExactlyOnceWith(entries[8]);
+});
+
 it("rejects missing cached services without executing module factories", async () => {
   const f = fixture();
   delete f.require.c.http;
@@ -79,9 +88,24 @@ it("the offline check uses the runtime matcher and rejects changed or ambiguous 
     expect(inspectCatalogBindings([`throw Error("must not execute");export const __webpack_modules__={${text}};`])).toBe(true);
     expect(rspackCatalogExport(text)).toBe("a");
   }
+  const wrapped = `models:(function${scoped.slice(scoped.indexOf("("))})`;
+  expect(inspectCatalogBindings([`const factories={${wrapped}};`])).toBe(true);
+  expect(inspectCatalogBindings([`const factories={${wrapped},${source}};`])).toBe(false);
   const unsupported = scoped.replace('c(s,"chat")', 'c(other,"chat")');
   expect(inspectCatalogBindings([`export const __webpack_modules__={${unsupported}};`])).toBe(false);
   expect(rspackCatalogExport(unsupported)).toBeUndefined();
   expect(rspackCatalogExport(source + source)).toBeUndefined();
   expect(inspectCatalogBindings([`const modules={${source}};`, `const other={${scoped}};`])).toBe(false);
+});
+
+it("binds the chat catalog when the native descriptor adjusts its query key before returning it", async () => {
+  const f = fixture();
+  const body = '({get:r,scope:s})=>{let q=c(s,"chat"),v=s.queryClient.getQueryData(q.queryKey);return r(flag)&&!v&&q.queryKey.push("work-cloud-disabled"),q}';
+  const source = String(f.require.m.models).replace('()=>c("chat")', body);
+  f.require.m.models.toString = () => source;
+  expect(inspectCatalogBindings([`const modules={${source}};`])).toBe(true);
+  expect(rspackCatalogExport(source.replace(',q})', ',other})'))).toBeUndefined();
+  const runtime = await discoverAppChatRuntime(f.environment);
+  await runtime.client.models();
+  expect(f.fetch).toHaveBeenCalledOnce();
 });

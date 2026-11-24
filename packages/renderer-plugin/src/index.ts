@@ -16,7 +16,8 @@ let cancelConnection: (() => void) | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let nextRetryAt = 0;
 let connectionError: string | null = null;
-let connectionStage: "discover" | "models" | "ready" = "discover";
+let connectionStage: "standby" | "discover" | "models" | "ready" = "discover";
+let detachedObserver: MutationObserver | undefined;
 
 export function start(api: LoaderApi): void {
   if (!isCodexChatRenderer(globalThis.location?.href)) throw new BridgeError("WRONG_RENDERER", "Bridge only runs in a managed Codex chat renderer.");
@@ -88,7 +89,17 @@ export function start(api: LoaderApi): void {
     if (!selected?.isCurrent()) throw new BridgeError(connectionError ?? "APP_UNSUPPORTED", "The native Chat connection is unavailable. Refresh it in Bridge settings.");
     return new AppChatBackgroundAdapter(selected.client, selected.isCurrent);
   });
-  void refresh();
+  // A detached browser pane has no task or native Chat runtime.
+  const composerSelector = "[data-codex-composer]";
+  if (document.location.pathname === "/detached-window.html" && !document.querySelector(composerSelector)) {
+    connectionStage = "standby";
+    detachedObserver = new document.defaultView!.MutationObserver(() => {
+      if (epoch !== instance || !document.querySelector(composerSelector)) return;
+      detachedObserver?.disconnect(); detachedObserver = undefined;
+      void refresh();
+    });
+    detachedObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-codex-composer"] });
+  } else void refresh();
 }
 
 export async function invokeHostCommand(operation: string, payload: unknown): Promise<unknown> {
@@ -99,7 +110,7 @@ export async function invokeHostCommand(operation: string, payload: unknown): Pr
   if (operation === "status") {
     const connected = runtime?.isCurrent() ?? false;
     result = { ...active.status(payload), protocolVersion: 2, models: active.configuration.models(),
-      connection: { state: connected ? "ready" : connecting ? "connecting" : "failed", stage: connectionStage,
+      connection: { state: connected ? "ready" : connectionStage === "standby" ? "standby" : connecting ? "connecting" : "failed", stage: connectionStage,
         error: connected ? null : connectionError, retryInMs: Math.max(0, nextRetryAt - Date.now()) },
       compatibility: { ...bundledSkillDiagnostics(), ...ui?.compatibility(), background: connected, backgroundError: connected ? null : connectionError } };
   } else if (operation === "exchange") {
@@ -114,6 +125,7 @@ export async function invokeHostCommand(operation: string, payload: unknown): Pr
 
 export function stop(): void {
   epoch++;
+  detachedObserver?.disconnect(); detachedObserver = undefined;
   clearTimeout(retryTimer); retryTimer = undefined; nextRetryAt = 0;
   cancelConnection?.(); cancelConnection = undefined;
   ui?.stop(); ui = undefined;

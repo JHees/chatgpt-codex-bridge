@@ -29,7 +29,7 @@ export interface Scope {
 }
 
 const MAX_SOURCE_BYTES = 24 * 1024 * 1024;
-const MAX_SOURCES = 8;
+const MAX_SOURCES = 12;
 const assetPattern = /^app:\/\/-\/assets\/(?:[A-Za-z0-9_-]+|\d+\.[a-f0-9]+)\.js$/;
 const clientPattern = /^chatgpt-conversation-client-[A-Za-z0-9_-]+\.js$/;
 const initialPattern = /^app-initial-[A-Za-z0-9_-]+\.js$/;

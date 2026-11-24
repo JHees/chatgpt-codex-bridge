@@ -6,6 +6,8 @@ function unsupported(): never { throw new BridgeError("APP_UNSUPPORTED", "The ca
 
 export function rspackCatalogExport(source: string): string | undefined {
   const declarations = [...source.matchAll(/([\w$]+)=\(0,[\w$.]+\)\([\w$.]+,(?:\(\)=>[\w$]+\("chat"\)|\(\{scope:([\w$]+)\}\)=>[\w$]+\(\2,"chat"\))\)/g)];
+  // Newer descriptors adjust the query key for the active workspace, then return the same chat query.
+  declarations.push(...source.matchAll(/([\w$]+)=\(0,[\w$.]+\)\([\w$.]+,\(\{get:[\w$]+,scope:([\w$]+)\}\)=>\{let ([\w$]+)=[\w$]+\(\2,"chat"\),[^{};]{1,500};return [^{};]{1,500},\3\}\)/g));
   if (declarations.length !== 1) return;
   const aliases = [...source.matchAll(/([\w$]+):(?:\(\)=>)?([\w$]+)(?=[,}])/g)]
     .filter(match => match[2] === declarations[0]![1]);

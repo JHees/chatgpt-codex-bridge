@@ -49,6 +49,20 @@ it("recovers a cold start without reload, and never sends while this task is dis
   expect(f.api.settings?.registerPage).toHaveBeenCalledTimes(1);
 });
 
+it("leaves a detached pane idle until Codex mounts a task composer", async () => {
+  const f = fixture();
+  f.window.happyDOM.setURL("app://-/detached-window.html?initialRoute=%2Fdetached-window");
+  start(f.api); await vi.advanceTimersByTimeAsync(30_000);
+  expect(await status()).toMatchObject({ connection: { state: "standby", error: null } });
+  expect(discover).not.toHaveBeenCalled();
+  const editor = f.window.document.createElement("div");
+  editor.setAttribute("data-codex-composer", "");
+  f.window.document.body.append(editor);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await status()).toMatchObject({ connection: { state: "ready" } });
+  expect(discover).toHaveBeenCalledOnce();
+});
+
 it("bounds a stalled discovery, drops its late result after stop, and does not mount late UI", async () => {
   const f = fixture(); let resolveOld!: (value: typeof f.runtime) => void;
   discover.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));

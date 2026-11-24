@@ -1,6 +1,14 @@
 import ts from "typescript";
 import { rspackCatalogExport } from "../packages/renderer-plugin/src/rspack-chat-runtime.js";
 
+function objectFactory(node: ts.Node) {
+  if (ts.isMethodDeclaration(node)) return node;
+  if (!ts.isPropertyAssignment(node)) return;
+  let value = node.initializer;
+  while (ts.isParenthesizedExpression(value)) value = value.expression;
+  if (ts.isFunctionExpression(value)) return value;
+}
+
 // Parse downloaded source as data; use the production matcher without executing app code.
 export function inspectCatalogBindings(sources: string[]): boolean {
   const candidates: (string | undefined)[] = [];
@@ -9,8 +17,9 @@ export function inspectCatalogBindings(sources: string[]): boolean {
     const pending: ts.Node[] = [file];
     while (pending.length) {
       const node = pending.pop()!;
-      if (ts.isMethodDeclaration(node) && node.parameters.length === 3) {
-        const text = source.slice(node.getStart(file), node.end);
+      const factory = objectFactory(node);
+      if (factory?.parameters.length === 3) {
+        const text = source.slice(factory.getStart(file), factory.end);
         if (text.includes('"chatgpt-models"') && text.includes('.safeGet("/models"')) {
           candidates.push(rspackCatalogExport(text));
           continue;
