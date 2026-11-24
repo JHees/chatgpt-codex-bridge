@@ -8,6 +8,8 @@ import { mountContextPresentation } from "./context-presentation.js";
 export const DEFAULTS_KEY = "collaboration-defaults-v2";
 const errorMessages: Record<string, [string, string]> = {
   APP_UNSUPPORTED: ["Chat 接口不可用。点“诊断”刷新；如果仍失败，请更新 Bridge。", "The Chat interface is unavailable. Refresh diagnostics; update Bridge if it persists."],
+  CONTEXT_EXISTS: ["草稿中已有 Bridge 指令。请更新 Loader 以复用原指令，或保留所需文字后手动移除旧指令块。", "Bridge instructions already exist in the draft. Update Loader to reuse matching instructions, or save any text you need and remove the old block."],
+  CONTEXT_EDITED: ["Bridge 指令已被编辑或重复。请保留需要的文字并移除旧指令块，再开启协作。", "Bridge instructions were edited or duplicated. Preserve any needed text and remove the old block before enabling collaboration."],
   CHAT_MODELS_UNAVAILABLE: ["没有读取到可用模型。点“诊断”刷新模型列表。", "No available models were found. Refresh the model list in diagnostics."],
   CHAT_CONNECT_TIMEOUT: ["连接 Chat 超时。点“诊断”后可安全重试同一请求。", "Connecting to Chat timed out. Refresh diagnostics, then retry the same request."],
   CHAT_READ_TIMEOUT: ["读取回复超时。使用相同 requestId 继续读取，别新建请求。", "Reading the reply timed out. Continue with the same requestId; do not create a new request."],
@@ -207,6 +209,15 @@ export class BridgeUi {
     return form;
   }
 
+  private prepareInstructions(owner: { hostId: string; taskId: string }): void {
+    const handle = this.handle;
+    if (!handle) return;
+    const input = { ...owner, revision: "bridge-enabled", text: this.t(
+      "当前任务已启用 Bridge。使用随包 bridge-chat skill。Chat 提供建议，Codex 审查并执行；按现有权限操作。用 status 读取任务、模型和会话状态。",
+      "Bridge is enabled for this task. Use the bundled bridge-chat skill. Chat advises; Codex reviews and executes under existing permissions. Read task, model and session state with status.") };
+    handle.prepareContext(input, { reuseMatching: true });
+  }
+
   private renderAccessory(root: HTMLElement, owner: ComposerIdentity): () => void {
     root.classList.add("bridge-controls");
     const taskKey = JSON.stringify(owner);
@@ -240,9 +251,7 @@ export class BridgeUi {
       if (settings.enabled && activeOwner && model && !contextAttempted && context?.state !== "prepared") {
         contextAttempted = true;
         try {
-          this.handle.prepareContext({ ...activeOwner, revision: "bridge-enabled", text: this.t(
-            "当前任务已启用 Bridge。使用随包 bridge-chat skill。Chat 提供建议，Codex 审查并执行；按现有权限操作。用 status 读取任务、模型和会话状态。",
-            "Bridge is enabled for this task. Use the bundled bridge-chat skill. Chat advises; Codex reviews and executes under existing permissions. Read task, model and session state with status.") });
+          this.prepareInstructions(activeOwner);
           this.lastError = null;
         } catch (error) { this.error(error); }
       }
@@ -308,8 +317,14 @@ export class BridgeUi {
     const enabled = this.node("input"); enabled.type = "checkbox"; enabled.setAttribute("role", "switch"); enabled.checked = value.enabled;
     enabled.disabled = "draftId" in owner || !this.control.configuration.models().some(model => model.key === value.modelKey);
     enabled.onchange = () => {
-      if (enabled.disabled) return;
-      value.enabled = enabled.checked; apply(); close();
+      if (enabled.disabled || !this.ownsMountedContext(owner)) { close(); return; }
+      const previous = value.enabled;
+      try {
+        if (enabled.checked && "taskId" in owner) this.prepareInstructions(owner);
+        value.enabled = enabled.checked; apply(); close();
+      } catch (error) {
+        value.enabled = previous; enabled.checked = previous; this.error(error);
+      }
     };
     row(this.t("本任务 Chat 协作", "Enable Bridge for this task"), enabled);
     if (enabled.disabled) {

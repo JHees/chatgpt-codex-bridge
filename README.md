@@ -12,7 +12,7 @@
 
 Bridge connects your current Codex task to the Chat model you choose. Chat reviews the plan; Codex evaluates the advice, works in your project, and returns evidence to the same conversation. Use it when you want a second perspective during implementation.
 
-Current version: **0.2.4**, with a single-session, plain-text protocol. Verified on Codex Desktop for Windows 26.1120.5083.0. Use Loader 0.6.3 for background-tab routing. [Release notes](docs/RELEASE-0.2.4.md)
+Current version: **0.2.5**, with a single-session, plain-text protocol. Verified on Codex Desktop for Windows 26.1120.5083.0. Use Loader 0.6.4 to reuse matching instructions when a draft is restored. [Release notes](docs/RELEASE-0.2.5.md)
 
 ## Install
 

@@ -2,7 +2,7 @@ import type { ComposerIdentity } from "./chat-configuration.js";
 
 export interface ComposerHandle {
   getStatus(): { available: boolean; hostId?: string; taskId?: string; draftId?: string; reason?: string; contextDisplay?: string; context?: { state: string; display?: string; revision?: string } };
-  prepareContext(input: ComposerIdentity & { revision: string; text: string; summary?: string }): void;
+  prepareContext(input: ComposerIdentity & { revision: string; text: string; summary?: string }, options?: { reuseMatching: boolean }): void;
   clearContext(): void;
   unregister(): void;
 }

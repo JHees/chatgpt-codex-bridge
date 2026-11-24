@@ -21,9 +21,10 @@ function fixture(owner: ComposerIdentity = {hostId:"local",taskId:"task-a"}, fai
   ]});
   configuration.updateTask(owner,{modelKey:configuration.models()[0]!.key});
   const prepared: unknown[]=[];let contextState="idle";
+  let handle!: ComposerHandle;
   const api:LoaderApi={version:"test",storage:{get:()=>null,set:()=>{}},
     settings:{registerPage:page=>{expect(page.iconSvg).toContain('viewBox="0 0 24 24"');expect(page.iconSvg).toContain('aria-hidden="true"');page.render(settings);return{unregister(){settings.replaceChildren();}};}},
-    composer:{registerAccessory:spec=>{spec.render(composer as unknown as HTMLElement,owner);const handle:ComposerHandle={
+    composer:{registerAccessory:spec=>{spec.render(composer as unknown as HTMLElement,owner);handle={
       getStatus:()=>({available:true,...("draftId" in owner?{draftId:owner.draftId}:owner),context:{state:contextState}}),
       prepareContext:input=>{prepared.push(input);contextState="prepared";},
       clearContext:()=>{contextState="idle";},unregister(){} };
@@ -33,8 +34,61 @@ function fixture(owner: ComposerIdentity = {hostId:"local",taskId:"task-a"}, fai
   const session=new BridgeSession(configuration,()=>{throw Error("No Chat used in UI tests");});
   const ui=new BridgeUi(document,api,session,async()=>{});ui.start();
   cleanup.push(()=>{ui.stop();session.stop();window.happyDOM.abort();});
-  return {window,document,settings,composer,configuration,prepared,ui};
+  return {window,document,settings,composer,configuration,prepared,ui,handle};
 }
+
+it("requests exact reuse when enabling collaboration without clearing the draft", async () => {
+  const f=fixture(); let clears=0;
+  const prepare=f.handle.prepareContext;
+  f.handle.prepareContext=(input,options)=>{expect(options?.reuseMatching).toBe(true);prepare(input);};
+  f.handle.clearContext=()=>{clears++;};
+  await Promise.resolve();
+  f.composer.querySelector<HTMLButtonElement>(".bridge-compact")!.click(); await Promise.resolve();
+  expect(clears).toBe(0);
+  f.document.querySelector<HTMLInputElement>('.bridge-popover input[role="switch"]')!.click();
+  expect(clears).toBe(0);
+  expect(f.prepared).toHaveLength(1);
+  expect(f.ui.compatibility().errorCode).toBeNull();
+  expect(f.configuration.task({hostId:"local",taskId:"task-a"}).enabled).toBe(true);
+});
+
+it("keeps collaboration off if saved instructions were edited", async () => {
+  const f=fixture();
+  f.handle.prepareContext=()=>{throw {code:"CONTEXT_EDITED"};};
+  await Promise.resolve();
+  f.composer.querySelector<HTMLButtonElement>(".bridge-compact")!.click(); await Promise.resolve();
+  const toggle=f.document.querySelector<HTMLInputElement>('.bridge-popover input[role="switch"]')!;
+  toggle.click();
+  expect(toggle.checked).toBe(false);
+  expect(f.configuration.task({hostId:"local",taskId:"task-a"}).enabled).toBe(false);
+  expect(f.prepared).toHaveLength(0);
+  expect(f.ui.compatibility().errorCode).toBe("CONTEXT_EDITED");
+});
+
+it("repairs a restored context block after reload without a manual toggle", async () => {
+  const f=fixture(); let clears=0;
+  const prepare=f.handle.prepareContext;
+  f.handle.prepareContext=(input,options)=>{expect(options?.reuseMatching).toBe(true);prepare(input);};
+  f.handle.clearContext=()=>{clears++;};
+  f.configuration.updateTask({hostId:"local",taskId:"task-a"},{enabled:true});
+  await Promise.resolve();
+  f.composer.querySelector<HTMLButtonElement>(".bridge-compact")!.click(); await Promise.resolve();
+  expect(clears).toBe(0);
+  expect(f.prepared).toHaveLength(1);
+  expect((f.prepared[0] as {revision:string}).revision).toBe("bridge-enabled");
+  expect(f.ui.compatibility().errorCode).toBeNull();
+});
+
+it("reports an edited restored context instead of overwriting it", async () => {
+  const f=fixture();
+
+  f.handle.prepareContext=()=>{throw {code:"CONTEXT_EDITED"};};
+  f.configuration.updateTask({hostId:"local",taskId:"task-a"},{enabled:true});
+  await Promise.resolve();
+  f.composer.querySelector<HTMLButtonElement>(".bridge-compact")!.click(); await Promise.resolve();
+  expect(f.prepared).toHaveLength(0);
+  expect(f.ui.compatibility().errorCode).toBe("CONTEXT_EDITED");
+});
 
 it("keeps global defaults off and never grants a draft task",async()=>{
   const f=fixture({draftId:"draft-a"});
